@@ -179,7 +179,7 @@
     "electron-builder": "22.9.1",
     "@adobe/node-fetch-retry": "^1.1.0",
     "app-builder-lib": "22.9.1",
-    "eslint": "^7.12.1",
+    "eslint": "^7.26.0",
     "eslint-config-fbjs": "^3.1.1",
     "eslint-config-prettier": "^6.15.0",
     "eslint-import-resolver-typescript": "^2.3.0",
