@@ -22,7 +22,7 @@
     "@babel/preset-env": "^7.12.10",
     "@babel/preset-react": "^7.12.10",
     "@babel/traverse": "^7.12.10",
-    "@babel/types": "^7.12.10",
+    "@babel/types": "^7.14.2",
     "@emotion/babel-plugin": "^11.0.0",
     "@types/fs-extra": "^9.0.1",
     "@types/node": "^14.14.10",
