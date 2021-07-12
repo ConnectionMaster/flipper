@@ -18,7 +18,7 @@
     "@typescript-eslint/parser": "^4.2.0",
     "flipper-test-utils": "0.0.0",
     "jest": "^26",
-    "prettier": "^2.0.0",
+    "prettier": "^2.3.2",
     "rimraf": "^3.0.2",
     "ts-jest": "^26.0.0",
     "ts-node": "^8",
