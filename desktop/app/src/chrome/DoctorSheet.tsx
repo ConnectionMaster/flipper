@@ -37,7 +37,7 @@ import runHealthchecks, {
   HealthcheckSettings,
   HealthcheckEventsHandler,
 } from '../utils/runHealthchecks';
-import {shell} from 'electron';
+import {getFlipperLib} from 'flipper-plugin';
 import {reportUsage} from '../utils/metrics';
 
 type StateFromProps = {
@@ -222,7 +222,7 @@ function hasNewProblems(result: HealthcheckResult) {
   return hasProblems(result) && !result.isAcknowledged;
 }
 
-export type State = {
+type State = {
   acknowledgeCheckboxVisible: boolean;
   acknowledgeOnClose?: boolean;
   selectedCheckKey?: string;
@@ -295,7 +295,7 @@ class DoctorSheet extends Component<Props, State> {
   }
 
   openHelpUrl(helpUrl?: string): void {
-    helpUrl && shell.openExternal(helpUrl);
+    helpUrl && getFlipperLib().openLink(helpUrl);
   }
 
   async runHealthchecks(): Promise<void> {

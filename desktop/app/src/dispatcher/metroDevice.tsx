@@ -9,14 +9,14 @@
 
 import {Store} from '../reducers/index';
 import {Logger} from '../fb-interfaces/Logger';
-import {registerDeviceCallbackOnPlugins} from '../utils/onRegisterDevice';
 import MetroDevice from '../devices/MetroDevice';
-import ArchivedDevice from '../devices/ArchivedDevice';
 import http from 'http';
 import {addErrorNotification} from '../reducers/notifications';
+import {destroyDevice} from '../reducers/connections';
+import {parseEnvironmentVariableAsNumber} from '../utils/environmentVariables';
 
-const METRO_PORT = 8081;
 const METRO_HOST = 'localhost';
+const METRO_PORT = parseEnvironmentVariableAsNumber('METRO_SERVER_PORT', 8081);
 const METRO_URL = `http://${METRO_HOST}:${METRO_PORT}`;
 const METRO_LOGS_ENDPOINT = `ws://${METRO_HOST}:${METRO_PORT}/events`;
 const METRO_MESSAGE = ['React Native packager is running', 'Metro is running'];
@@ -39,7 +39,7 @@ async function isMetroRunning(): Promise<boolean> {
           });
       })
       .on('error', (err: any) => {
-        if (err.code !== 'ECONNREFUSED') {
+        if (err.code !== 'ECONNREFUSED' && err.code !== 'ECONNRESET') {
           console.error('Could not connect to METRO ' + err);
         }
         resolve(false);
@@ -58,47 +58,15 @@ export async function registerMetroDevice(
     name: metroDevice.title,
   });
 
-  metroDevice.loadDevicePlugins(store.getState().plugins.devicePlugins);
+  metroDevice.loadDevicePlugins(
+    store.getState().plugins.devicePlugins,
+    store.getState().connections.enabledDevicePlugins,
+  );
   store.dispatch({
     type: 'REGISTER_DEVICE',
     payload: metroDevice,
     serial: METRO_URL,
   });
-
-  registerDeviceCallbackOnPlugins(
-    store,
-    store.getState().plugins.devicePlugins,
-    store.getState().plugins.clientPlugins,
-    metroDevice,
-  );
-}
-
-async function unregisterDevices(store: Store, logger: Logger) {
-  logger.track('usage', 'unregister-device', {
-    os: 'Metro',
-    serial: METRO_URL,
-  });
-
-  let archivedDevice: ArchivedDevice | undefined = undefined;
-  const device = store
-    .getState()
-    .connections.devices.find((device) => device.serial === METRO_URL);
-  if (device && !device.isArchived) {
-    archivedDevice = device.archive();
-  }
-
-  store.dispatch({
-    type: 'UNREGISTER_DEVICES',
-    payload: new Set([METRO_URL]),
-  });
-
-  if (archivedDevice) {
-    archivedDevice.loadDevicePlugins(store.getState().plugins.devicePlugins);
-    store.dispatch({
-      type: 'REGISTER_DEVICE',
-      payload: archivedDevice,
-    });
-  }
 }
 
 export default (store: Store, logger: Logger) => {
@@ -112,35 +80,45 @@ export default (store: Store, logger: Logger) => {
     }
 
     if (await isMetroRunning()) {
-      const _ws = new WebSocket(METRO_LOGS_ENDPOINT);
+      try {
+        const _ws = new WebSocket(METRO_LOGS_ENDPOINT);
 
-      _ws.onopen = () => {
-        clearTimeout(guard);
-        ws = _ws;
-        registerMetroDevice(ws, store, logger);
-      };
-
-      _ws.onclose = _ws.onerror = () => {
-        if (!unregistered) {
-          unregistered = true;
+        _ws.onopen = () => {
           clearTimeout(guard);
-          ws = undefined;
-          unregisterDevices(store, logger);
-          scheduleNext();
-        }
-      };
+          ws = _ws;
+          registerMetroDevice(ws, store, logger);
+        };
 
-      const guard = setTimeout(() => {
-        // Metro is running, but didn't respond to /events endpoint
-        store.dispatch(
-          addErrorNotification(
-            'Failed to connect to Metro',
-            `Flipper did find a running Metro instance, but couldn't connect to the logs. Probably your React Native version is too old to support Flipper. Cause: Failed to get a connection to ${METRO_LOGS_ENDPOINT} in a timely fashion`,
-          ),
-        );
-        registerMetroDevice(undefined, store, logger);
-        // Note: no scheduleNext, we won't retry until restart
-      }, 5000);
+        _ws.onclose = _ws.onerror = function (event?: any) {
+          if (event?.type === 'error') {
+            console.error(
+              `Failed to connect to Metro on ${METRO_LOGS_ENDPOINT}`,
+              event,
+            );
+          }
+          if (!unregistered) {
+            unregistered = true;
+            clearTimeout(guard);
+            ws = undefined;
+            destroyDevice(store, logger, METRO_URL);
+            scheduleNext();
+          }
+        };
+
+        const guard = setTimeout(() => {
+          // Metro is running, but didn't respond to /events endpoint
+          store.dispatch(
+            addErrorNotification(
+              'Failed to connect to Metro',
+              `Flipper did find a running Metro instance, but couldn't connect to the logs. Probably your React Native version is too old to support Flipper. Cause: Failed to get a connection to ${METRO_LOGS_ENDPOINT} in a timely fashion`,
+            ),
+          );
+          registerMetroDevice(undefined, store, logger);
+          // Note: no scheduleNext, we won't retry until restart
+        }, 5000);
+      } catch (e) {
+        console.error('Error while setting up Metro websocket connect', e);
+      }
     } else {
       scheduleNext();
     }

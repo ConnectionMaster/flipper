@@ -82,12 +82,24 @@
 .ant-notification-notice-message {
   color: @background-default;
 }
-.ant-notification-notice {
+.ant-notification-notice, .ant-message-notice-content {
   background: @text-color-primary;
   color: @background-default;
+}
+
+// grow dropdown buttons like plain button
+.ant-dropdown-button {
+  flex-grow: 1;
+  & button:first-child {
+    flex-grow: 1;
+  }
 }
 
 .flipperlegacy_design {
   // Prevents ANT breaking global styles implicitly used by old Flipper design
   line-height: 1;
+}
+
+.ant-btn {
+  font-weight: normal;
 }

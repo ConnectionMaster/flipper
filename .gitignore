@@ -7,6 +7,7 @@ bundle.map
 *.bundle.js
 *.bundle.map
 .env
+desktop-branch-*/
 
 # conflicts with FB internal infra
 .watchmanconfig
@@ -37,3 +38,6 @@ libs/*/bin/**/*.class
 
 # Automatically generated
 docs/extending/ui-components.mdx
+docs/setup/plugins/
+docs/features/plugins/
+website/src/embedded-pages/docs/plugins/

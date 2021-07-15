@@ -10,7 +10,7 @@
 import {Atom, createState} from 'flipper-plugin';
 import {User} from '../reducers/user';
 
-export async function getUser(): Promise<User> {
+export async function getUser(): Promise<User | null> {
   throw new Error('Feature not implemented');
 }
 
@@ -38,7 +38,7 @@ export async function graphQLQuery(_query: string): Promise<any> {
   throw new Error('Feature not implemented');
 }
 
-export function logoutUser(): Promise<void> {
+export function logoutUser(_persist: boolean = false): Promise<void> {
   throw new Error('Feature not implemented');
 }
 
@@ -90,7 +90,12 @@ export async function appendAccessTokenToUrl(_url: URL): Promise<string> {
 }
 
 const isLoggedInAtom = createState(false);
+const isConnectedAtom = createState(true);
 
 export function isLoggedIn(): Atom<boolean> {
   return isLoggedInAtom;
+}
+
+export function isConnected(): Atom<boolean> {
+  return isConnectedAtom;
 }

@@ -286,18 +286,15 @@ export default class CertificateProvider {
       const deviceIdPromise = appNamePromise.then((app) =>
         this.getTargetAndroidDeviceId(app, destination, csr),
       );
-      return Promise.all([
-        deviceIdPromise,
-        appNamePromise,
-        this.adb,
-      ]).then(([deviceId, appName, adbClient]) =>
-        androidUtil.push(
-          adbClient,
-          deviceId,
-          appName,
-          destination + filename,
-          contents,
-        ),
+      return Promise.all([deviceIdPromise, appNamePromise, this.adb]).then(
+        ([deviceId, appName, adbClient]) =>
+          androidUtil.push(
+            adbClient,
+            deviceId,
+            appName,
+            destination + filename,
+            contents,
+          ),
       );
     }
     if (os === 'iOS' || os === 'windows' || os == 'MacOS') {
@@ -305,9 +302,8 @@ export default class CertificateProvider {
         (err) => {
           if (os === 'iOS') {
             // Writing directly to FS failed. It's probably a physical device.
-            const relativePathInsideApp = this.getRelativePathInAppContainer(
-              destination,
-            );
+            const relativePathInsideApp =
+              this.getRelativePathInAppContainer(destination);
             return appNamePromise
               .then((appName) => {
                 return this.getTargetiOSDeviceId(appName, destination, csr);
@@ -377,7 +373,7 @@ export default class CertificateProvider {
               return {id: device.id, ...result, error: null};
             })
             .catch((e) => {
-              console.error(
+              console.warn(
                 `Unable to check for matching CSR in ${device.id}:${appName}`,
                 logTag,
               );
@@ -394,7 +390,7 @@ export default class CertificateProvider {
             const foundCsrs = devices
               .filter((d) => d.foundCsr !== null)
               .map((d) => (d.foundCsr ? encodeURI(d.foundCsr) : 'null'));
-            console.error(`Looking for CSR (url encoded):
+            console.warn(`Looking for CSR (url encoded):
 
             ${encodeURI(this.santitizeString(csr))}
 
@@ -404,7 +400,7 @@ export default class CertificateProvider {
             throw new Error(`No matching device found for app: ${appName}`);
           }
           if (matchingIds.length > 1) {
-            console.error(
+            console.warn(
               new Error('More than one matching device found for CSR'),
               csr,
             );
@@ -425,7 +421,10 @@ export default class CertificateProvider {
       return Promise.resolve(matches[1]);
     }
     return iosUtil
-      .targets(this.store.getState().settingsState.idbPath)
+      .targets(
+        this.store.getState().settingsState.idbPath,
+        this.store.getState().settingsState.enablePhysicalIOS,
+      )
       .then((targets) => {
         if (targets.length === 0) {
           throw new Error('No iOS devices found');

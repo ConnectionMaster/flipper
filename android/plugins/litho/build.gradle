@@ -6,7 +6,6 @@
  */
 
 apply plugin: 'com.android.library'
-apply plugin: 'maven'
 
 android {
     compileSdkVersion rootProject.compileSdkVersion
@@ -36,4 +35,4 @@ android {
     }
 }
 
-apply from: rootProject.file('gradle/release.gradle')
+apply plugin: 'com.vanniktech.maven.publish'

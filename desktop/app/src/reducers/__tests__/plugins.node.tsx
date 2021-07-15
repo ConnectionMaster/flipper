@@ -11,21 +11,25 @@ import {
   default as reducer,
   registerPlugins,
   addGatekeepedPlugins,
+  registerInstalledPlugins,
 } from '../plugins';
 import {FlipperPlugin, FlipperDevicePlugin, BaseAction} from '../../plugin';
 import {InstalledPluginDetails} from 'flipper-plugin-lib';
+import {wrapSandy} from '../../test-utils/createMockFlipperWithPlugin';
 
-const testPlugin = class extends FlipperPlugin<any, BaseAction, any> {
+const testPluginOrig = class extends FlipperPlugin<any, BaseAction, any> {
   static id = 'TestPlugin';
 };
+const testPlugin = wrapSandy(testPluginOrig);
 
-const testDevicePlugin = class extends FlipperDevicePlugin<
+const testDevicePluginOrig = class extends FlipperDevicePlugin<
   any,
   BaseAction,
   any
 > {
   static id = 'TestDevicePlugin';
 };
+const testDevicePlugin = wrapSandy(testDevicePluginOrig);
 
 test('add clientPlugin', () => {
   const res = reducer(
@@ -39,6 +43,9 @@ test('add clientPlugin', () => {
       disabledPlugins: [],
       selectedPlugins: [],
       marketplacePlugins: [],
+      uninstalledPluginNames: new Set(),
+      installedPlugins: new Map(),
+      initialised: false,
     },
     registerPlugins([testPlugin]),
   );
@@ -57,6 +64,9 @@ test('add devicePlugin', () => {
       disabledPlugins: [],
       selectedPlugins: [],
       marketplacePlugins: [],
+      uninstalledPluginNames: new Set(),
+      installedPlugins: new Map(),
+      initialised: false,
     },
     registerPlugins([testDevicePlugin]),
   );
@@ -75,6 +85,9 @@ test('do not add plugin twice', () => {
       disabledPlugins: [],
       selectedPlugins: [],
       marketplacePlugins: [],
+      uninstalledPluginNames: new Set(),
+      installedPlugins: new Map(),
+      initialised: false,
     },
     registerPlugins([testPlugin, testPlugin]),
   );
@@ -88,6 +101,7 @@ test('add gatekeeped plugin', () => {
       version: '1.0.0',
       dir: '/plugins/test',
       specVersion: 2,
+      pluginType: 'client',
       source: 'src/index.ts',
       isBundled: false,
       isActivatable: true,
@@ -108,8 +122,40 @@ test('add gatekeeped plugin', () => {
       disabledPlugins: [],
       selectedPlugins: [],
       marketplacePlugins: [],
+      installedPlugins: new Map(),
+      uninstalledPluginNames: new Set(),
+      initialised: false,
     },
     addGatekeepedPlugins(gatekeepedPlugins),
   );
   expect(res.gatekeepedPlugins).toEqual(gatekeepedPlugins);
+});
+
+test('reduce empty registerInstalledPlugins', () => {
+  const result = reducer(undefined, registerInstalledPlugins([]));
+  expect(result.installedPlugins).toEqual(new Map());
+});
+
+const EXAMPLE_PLUGIN = {
+  name: 'test',
+  version: '0.1',
+  description: 'my test plugin',
+  dir: '/plugins/test',
+  specVersion: 2,
+  source: 'src/index.ts',
+  isBundled: false,
+  isActivatable: true,
+  main: 'lib/index.js',
+  title: 'test',
+  id: 'test',
+  entry: '/plugins/test/lib/index.js',
+} as InstalledPluginDetails;
+
+test('reduce registerInstalledPlugins, clear again', () => {
+  const result = reducer(undefined, registerInstalledPlugins([EXAMPLE_PLUGIN]));
+  expect(result.installedPlugins).toEqual(
+    new Map([[EXAMPLE_PLUGIN.name, EXAMPLE_PLUGIN]]),
+  );
+  const result2 = reducer(result, registerInstalledPlugins([]));
+  expect(result2.installedPlugins).toEqual(new Map());
 });

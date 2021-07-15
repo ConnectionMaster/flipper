@@ -11,21 +11,14 @@ import os from 'os';
 import path from 'path';
 import electron from 'electron';
 import {getInstance as getLogger} from '../fb-stubs/Logger';
-import {Store, State as ReduxState, MiddlewareAPI} from '../reducers';
+import {Store, MiddlewareAPI} from '../reducers';
 import {DeviceExport} from '../devices/BaseDevice';
-import {State as PluginStatesState} from '../reducers/pluginStates';
 import {State as PluginsState} from '../reducers/plugins';
 import {PluginNotification} from '../reducers/notifications';
 import Client, {ClientExport, ClientQuery} from '../Client';
-import {pluginKey} from '../reducers/pluginStates';
-import {
-  callClient,
-  supportsMethod,
-  PluginDefinition,
-  DevicePluginMap,
-  ClientPluginMap,
-  isSandyPlugin,
-} from '../plugin';
+import {getAppVersion} from './info';
+import {pluginKey} from '../utils/pluginUtils';
+import {DevicePluginMap, ClientPluginMap} from '../plugin';
 import {default as BaseDevice} from '../devices/BaseDevice';
 import {default as ArchivedDevice} from '../devices/ArchivedDevice';
 import fs from 'fs';
@@ -34,20 +27,20 @@ import {remote, OpenDialogOptions} from 'electron';
 import {readCurrentRevision} from './packageMetadata';
 import {tryCatchReportPlatformFailures} from './metrics';
 import {promisify} from 'util';
-import promiseTimeout from './promiseTimeout';
-import {Idler} from './Idler';
+import {TestIdler} from './Idler';
 import {setStaticView} from '../reducers/connections';
 import {
   resetSupportFormV2State,
   SupportFormRequestDetailsState,
 } from '../reducers/supportForm';
 import {setSelectPluginsToExportActiveSheet} from '../reducers/application';
-import {deconstructClientId, deconstructPluginKey} from '../utils/clientUtils';
+import {deconstructClientId} from '../utils/clientUtils';
 import {performance} from 'perf_hooks';
 import {processMessageQueue} from './messageQueue';
 import {getPluginTitle} from './pluginUtils';
 import {capture} from './screenshot';
 import {uploadFlipperMedia} from '../fb-stubs/user';
+import {Idler} from 'flipper-plugin';
 
 export const IMPORT_FLIPPER_TRACE_EVENT = 'import-flipper-trace';
 export const EXPORT_FLIPPER_TRACE_EVENT = 'export-flipper-trace';
@@ -70,20 +63,12 @@ export type ExportType = {
   device: DeviceExport | null;
   deviceScreenshot: string | null;
   store: {
-    pluginStates: PluginStatesExportState;
     activeNotifications: Array<PluginNotification>;
   };
+  // The GraphQL plugin relies on this format for generating
+  // Flipper traces from employee dogfooding. See D28209561.
   pluginStates2: SandyPluginStates;
   supportRequestDetails?: SupportFormRequestDetailsState;
-};
-
-type ProcessPluginStatesOptions = {
-  clients: Array<ClientExport>;
-  serial: string;
-  allPluginStates: PluginStatesState;
-  devicePlugins: DevicePluginMap;
-  selectedPlugins: Array<string>;
-  statusUpdate?: (msg: string) => void;
 };
 
 type ProcessNotificationStatesOptions = {
@@ -98,7 +83,6 @@ type PluginsToProcess = {
   pluginKey: string;
   pluginId: string;
   pluginName: string;
-  pluginClass: PluginDefinition;
   client: Client;
 }[];
 
@@ -107,11 +91,12 @@ type AddSaltToDeviceSerialOptions = {
   device: BaseDevice;
   deviceScreenshot: string | null;
   clients: Array<ClientExport>;
-  pluginStates: PluginStatesExportState;
   pluginStates2: SandyPluginStates;
+  devicePluginStates: Record<string, any>;
   pluginNotification: Array<PluginNotification>;
   selectedPlugins: Array<string>;
-  statusUpdate?: (msg: string) => void;
+  statusUpdate: (msg: string) => void;
+  idler: Idler;
 };
 
 export function displayFetchMetadataErrors(
@@ -147,61 +132,11 @@ export function processClients(
   return filteredClients;
 }
 
-export function processPluginStates(
-  options: ProcessPluginStatesOptions,
-): PluginStatesState {
-  const {
-    clients,
-    serial,
-    allPluginStates,
-    devicePlugins,
-    selectedPlugins,
-    statusUpdate,
-  } = options;
-
-  let pluginStates: PluginStatesState = {};
-  statusUpdate &&
-    statusUpdate('Filtering the plugin states for the filtered Clients...');
-  for (const key in allPluginStates) {
-    const plugin = deconstructPluginKey(key);
-
-    const pluginName = plugin.pluginName;
-    if (
-      pluginName &&
-      selectedPlugins.length > 0 &&
-      !selectedPlugins.includes(pluginName)
-    ) {
-      continue;
-    }
-    if (plugin.type === 'client') {
-      if (!clients.some((c) => c.id.includes(plugin.client))) {
-        continue;
-      }
-    }
-    if (plugin.type === 'device') {
-      if (
-        !pluginName ||
-        !devicePlugins.has(pluginName) ||
-        serial !== plugin.client
-      ) {
-        continue;
-      }
-    }
-    pluginStates = {...pluginStates, [key]: allPluginStates[key]};
-  }
-  return pluginStates;
-}
-
 export function processNotificationStates(
   options: ProcessNotificationStatesOptions,
 ): Array<PluginNotification> {
-  const {
-    clients,
-    serial,
-    allActiveNotifications,
-    devicePlugins,
-    statusUpdate,
-  } = options;
+  const {clients, serial, allActiveNotifications, devicePlugins, statusUpdate} =
+    options;
   statusUpdate &&
     statusUpdate('Filtering the notifications for the filtered Clients...');
   const activeNotifications = allActiveNotifications.filter((notif) => {
@@ -216,84 +151,30 @@ export function processNotificationStates(
   return activeNotifications;
 }
 
-const serializePluginStates = async (
-  pluginStates: PluginStatesState,
-  clientPlugins: ClientPluginMap,
-  devicePlugins: DevicePluginMap,
-  statusUpdate?: (msg: string) => void,
-  idler?: Idler,
-): Promise<PluginStatesExportState> => {
-  const pluginsMap = new Map<string, PluginDefinition>([
-    ...clientPlugins.entries(),
-    ...devicePlugins.entries(),
-  ]);
-  const pluginExportState: PluginStatesExportState = {};
-  for (const key in pluginStates) {
-    const pluginName = deconstructPluginKey(key).pluginName;
-    statusUpdate && statusUpdate(`Serialising ${pluginName}...`);
-    const serializationMarker = `${EXPORT_FLIPPER_TRACE_EVENT}:serialization-per-plugin`;
-    performance.mark(serializationMarker);
-    const pluginClass = pluginName ? pluginsMap.get(pluginName) : null;
-    if (isSandyPlugin(pluginClass)) {
-      continue; // Those are already processed by `exportSandyPluginStates`
-    } else if (pluginClass) {
-      pluginExportState[key] = await pluginClass.serializePersistedState(
-        pluginStates[key],
-        statusUpdate,
-        idler,
-        pluginName,
-      );
-      getLogger().trackTimeSince(serializationMarker, serializationMarker, {
-        plugin: pluginName,
-      });
-    }
-  }
-  return pluginExportState;
-};
-
-function exportSandyPluginStates(
+async function exportSandyPluginStates(
   pluginsToProcess: PluginsToProcess,
-): SandyPluginStates {
+  idler: Idler,
+  statusUpdate: (msg: string) => void,
+): Promise<SandyPluginStates> {
   const res: SandyPluginStates = {};
-  pluginsToProcess.forEach(({pluginId, client, pluginClass}) => {
-    if (isSandyPlugin(pluginClass) && client.sandyPluginStates.has(pluginId)) {
+  for (const key in pluginsToProcess) {
+    const {pluginId, client} = pluginsToProcess[key];
+    if (client.sandyPluginStates.has(pluginId)) {
       if (!res[client.id]) {
         res[client.id] = {};
       }
-      res[client.id][pluginId] = client.sandyPluginStates
-        .get(pluginId)!
-        .exportState();
-    }
-  });
-  return res;
-}
-
-const deserializePluginStates = (
-  pluginStatesExportState: PluginStatesExportState,
-  clientPlugins: ClientPluginMap,
-  devicePlugins: DevicePluginMap,
-): PluginStatesState => {
-  const pluginsMap = new Map<string, PluginDefinition>([
-    ...clientPlugins.entries(),
-    ...devicePlugins.entries(),
-  ]);
-  const pluginsState: PluginStatesState = {};
-  for (const key in pluginStatesExportState) {
-    const pluginName = deconstructPluginKey(key).pluginName;
-    if (!pluginName || !pluginsMap.get(pluginName)) {
-      continue;
-    }
-    const pluginClass = pluginsMap.get(pluginName);
-    if (isSandyPlugin(pluginClass)) {
-      pluginsState[key] = pluginStatesExportState[key];
-    } else if (pluginClass) {
-      pluginsState[key] = pluginClass.deserializePersistedState(
-        pluginStatesExportState[key],
-      );
+      try {
+        res[client.id][pluginId] = await client.sandyPluginStates
+          .get(pluginId)!
+          .exportState(idler, statusUpdate);
+      } catch (error) {
+        console.error('Error while serializing plugin ' + pluginId, error);
+        throw new Error(`Failed to serialize plugin ${pluginId}: ${error}`);
+      }
     }
   }
-  return pluginsState;
-};
+  return res;
+}
 
 function replaceSerialsInKeys<T extends Record<string, any>>(
   collection: T,
@@ -303,9 +184,7 @@ function replaceSerialsInKeys<T extends Record<string, any>>(
   const result: Record<string, any> = {};
   for (const key in collection) {
     if (!key.includes(baseSerial)) {
-      throw new Error(
-        `Error while exporting, plugin state (${key}) does not have ${baseSerial} in its key`,
-      );
+      continue;
     }
     result[key.replace(baseSerial, newSerial)] = collection[key];
   }
@@ -317,11 +196,10 @@ async function addSaltToDeviceSerial({
   device,
   deviceScreenshot,
   clients,
-  pluginStates,
   pluginNotification,
   statusUpdate,
-  selectedPlugins,
   pluginStates2,
+  devicePluginStates,
 }: AddSaltToDeviceSerialOptions): Promise<ExportType> {
   const {serial} = device;
   const newSerial = salt + '-' + serial;
@@ -330,11 +208,6 @@ async function addSaltToDeviceSerial({
     deviceType: device.deviceType,
     title: device.title,
     os: device.os,
-    logEntries: selectedPlugins.includes('DeviceLogs')
-      ? device.getLogs(
-          new Date(new Date().getTime() - 1000 * 60 * 10), // Last 10 mins of logs
-        )
-      : [],
     screenshotHandle: deviceScreenshot,
   });
   statusUpdate &&
@@ -351,11 +224,6 @@ async function addSaltToDeviceSerial({
     statusUpdate(
       'Adding salt to the selected device id in the plugin states...',
     );
-  const updatedPluginStates = replaceSerialsInKeys(
-    pluginStates,
-    serial,
-    newSerial,
-  );
   const updatedPluginStates2 = replaceSerialsInKeys(
     pluginStates2,
     serial,
@@ -376,13 +244,12 @@ async function addSaltToDeviceSerial({
   });
   const revision: string | undefined = await readCurrentRevision();
   return {
-    fileVersion: remote.app.getVersion(),
+    fileVersion: getAppVersion() || 'unknown',
     flipperReleaseRevision: revision,
     clients: updatedClients,
-    device: newDevice.toJSON(),
+    device: {...newDevice.toJSON(), pluginStates: devicePluginStates},
     deviceScreenshot: deviceScreenshot,
     store: {
-      pluginStates: updatedPluginStates,
       activeNotifications: updatedPluginNotifications,
     },
     pluginStates2: updatedPluginStates2,
@@ -392,7 +259,6 @@ async function addSaltToDeviceSerial({
 type ProcessStoreOptions = {
   activeNotifications: Array<PluginNotification>;
   device: BaseDevice | null;
-  pluginStates: PluginStatesState;
   pluginStates2: SandyPluginStates;
   clients: Array<ClientExport>;
   devicePlugins: DevicePluginMap;
@@ -406,33 +272,31 @@ export async function processStore(
   {
     activeNotifications,
     device,
-    pluginStates,
     pluginStates2,
     clients,
     devicePlugins,
-    clientPlugins,
     salt,
     selectedPlugins,
     statusUpdate,
   }: ProcessStoreOptions,
-  idler?: Idler,
+  idler: Idler = new TestIdler(true),
 ): Promise<ExportType> {
   if (device) {
     const {serial} = device;
-    statusUpdate && statusUpdate('Capturing screenshot...');
-    const deviceScreenshot = await capture(device).catch((e) => {
-      console.warn('Failed to capture device screenshot when exporting. ' + e);
-      return null;
-    });
+    if (!statusUpdate) {
+      statusUpdate = () => {};
+    }
+    statusUpdate('Capturing screenshot...');
+    const deviceScreenshot = device.connected.get()
+      ? await capture(device).catch((e) => {
+          console.warn(
+            'Failed to capture device screenshot when exporting. ' + e,
+          );
+          return null;
+        })
+      : null;
     const processedClients = processClients(clients, serial, statusUpdate);
-    const processedPluginStates = processPluginStates({
-      clients: processedClients,
-      serial,
-      allPluginStates: pluginStates,
-      devicePlugins,
-      selectedPlugins,
-      statusUpdate,
-    });
+
     const processedActiveNotifications = processNotificationStates({
       clients: processedClients,
       serial,
@@ -441,15 +305,13 @@ export async function processStore(
       statusUpdate,
     });
 
-    const exportPluginState = await serializePluginStates(
-      processedPluginStates,
-      clientPlugins,
-      devicePlugins,
-      statusUpdate,
+    const devicePluginStates = await device.exportState(
       idler,
+      statusUpdate,
+      selectedPlugins,
     );
 
-    statusUpdate && statusUpdate('Uploading screenshot...');
+    statusUpdate('Uploading screenshot...');
     const deviceScreenshotLink =
       deviceScreenshot &&
       (await uploadFlipperMedia(deviceScreenshot, 'Image').catch((e) => {
@@ -462,81 +324,17 @@ export async function processStore(
       device,
       deviceScreenshot: deviceScreenshotLink,
       clients: processedClients,
-      pluginStates: exportPluginState,
       pluginNotification: processedActiveNotifications,
       statusUpdate,
       selectedPlugins,
       pluginStates2,
+      devicePluginStates,
+      idler,
     });
 
     return exportFlipperData;
   }
   throw new Error('Selected device is null, please select a device');
-}
-
-export async function fetchMetadata(
-  pluginsToProcess: PluginsToProcess,
-  pluginStates: PluginStatesState,
-  state: ReduxState,
-  statusUpdate?: (msg: string) => void,
-  idler?: Idler,
-): Promise<{
-  pluginStates: PluginStatesState;
-  errors: {[plugin: string]: Error} | null;
-}> {
-  const newPluginState = {...pluginStates};
-  let errorObject: {[plugin: string]: Error} | null = null;
-
-  for (const {
-    pluginName,
-    pluginId,
-    pluginClass,
-    client,
-    pluginKey,
-  } of pluginsToProcess) {
-    const exportState = pluginClass ? pluginClass.exportPersistedState : null;
-    if (exportState) {
-      const fetchMetaDataMarker = `${EXPORT_FLIPPER_TRACE_EVENT}:fetch-meta-data-per-plugin`;
-      performance.mark(fetchMetaDataMarker);
-      try {
-        statusUpdate &&
-          statusUpdate(`Fetching metadata for plugin ${pluginName}...`);
-        const data = await promiseTimeout(
-          240000, // Fetching MobileConfig data takes ~ 3 mins, thus keeping timeout at 4 mins.
-          exportState(
-            callClient(client, pluginId),
-            newPluginState[pluginKey],
-            state,
-            idler,
-            statusUpdate,
-            supportsMethod(client, pluginId),
-          ),
-          `Timed out while collecting data for ${pluginName}`,
-        );
-        if (!data) {
-          throw new Error(
-            `Metadata returned by the ${pluginName} is undefined`,
-          );
-        }
-        getLogger().trackTimeSince(fetchMetaDataMarker, fetchMetaDataMarker, {
-          pluginId,
-        });
-        newPluginState[pluginKey] = data;
-      } catch (e) {
-        if (!errorObject) {
-          errorObject = {};
-        }
-        errorObject[pluginName] = e;
-        getLogger().trackTimeSince(fetchMetaDataMarker, fetchMetaDataMarker, {
-          pluginId,
-          error: e,
-        });
-        continue;
-      }
-    }
-  }
-
-  return {pluginStates: newPluginState, errors: errorObject};
 }
 
 async function processQueues(
@@ -545,39 +343,29 @@ async function processQueues(
   statusUpdate?: (msg: string) => void,
   idler?: Idler,
 ) {
-  for (const {
-    pluginName,
-    pluginId,
-    pluginKey,
-    pluginClass,
-    client,
-  } of pluginsToProcess) {
-    if (isSandyPlugin(pluginClass) || pluginClass.persistedStateReducer) {
-      client.flushMessageBuffer();
-      const processQueueMarker = `${EXPORT_FLIPPER_TRACE_EVENT}:process-queue-per-plugin`;
-      performance.mark(processQueueMarker);
-      const plugin = isSandyPlugin(pluginClass)
-        ? client.sandyPluginStates.get(pluginId)
-        : pluginClass;
-      if (!plugin) continue;
-      await processMessageQueue(
-        plugin,
-        pluginKey,
-        store,
-        ({current, total}) => {
-          statusUpdate?.(
-            `Processing event ${current} / ${total} (${Math.round(
-              (current / total) * 100,
-            )}%) for plugin ${pluginName}`,
-          );
-        },
-        idler,
-      );
+  for (const {pluginName, pluginId, pluginKey, client} of pluginsToProcess) {
+    client.flushMessageBuffer();
+    const processQueueMarker = `${EXPORT_FLIPPER_TRACE_EVENT}:process-queue-per-plugin`;
+    performance.mark(processQueueMarker);
+    const plugin = client.sandyPluginStates.get(pluginId);
+    if (!plugin) continue;
+    await processMessageQueue(
+      plugin,
+      pluginKey,
+      store,
+      ({current, total}) => {
+        statusUpdate?.(
+          `Processing event ${current} / ${total} (${Math.round(
+            (current / total) * 100,
+          )}%) for plugin ${pluginName}`,
+        );
+      },
+      idler,
+    );
 
-      getLogger().trackTimeSince(processQueueMarker, processQueueMarker, {
-        pluginId,
-      });
-    }
+    getLogger().trackTimeSince(processQueueMarker, processQueueMarker, {
+      pluginId,
+    });
   }
 }
 
@@ -590,20 +378,18 @@ export function determinePluginsToProcess(
   const selectedPlugins = plugins.selectedPlugins;
 
   for (const client of clients) {
-    if (
-      !selectedDevice ||
-      selectedDevice.isArchived ||
-      client.query.device_id !== selectedDevice.serial
-    ) {
+    if (!selectedDevice || client.query.device_id !== selectedDevice.serial) {
       continue;
     }
     const selectedFilteredPlugins = client
       ? selectedPlugins.length > 0
-        ? client.plugins.filter((plugin) => selectedPlugins.includes(plugin))
+        ? Array.from(client.plugins).filter((plugin) =>
+            selectedPlugins.includes(plugin),
+          )
         : client.plugins
       : [];
     for (const plugin of selectedFilteredPlugins) {
-      if (!client.plugins.includes(plugin)) {
+      if (!client.plugins.has(plugin)) {
         // Ignore clients which doesn't support the selected plugins.
         continue;
       }
@@ -616,7 +402,6 @@ export function determinePluginsToProcess(
           client,
           pluginId: plugin,
           pluginName: getPluginTitle(pluginClass),
-          pluginClass,
         });
       }
     }
@@ -626,13 +411,13 @@ export function determinePluginsToProcess(
 
 async function getStoreExport(
   store: MiddlewareAPI,
-  statusUpdate?: (msg: string) => void,
-  idler?: Idler,
+  statusUpdate: (msg: string) => void = () => {},
+  idler: Idler,
 ): Promise<{
   exportData: ExportType;
   fetchMetaDataErrors: {[plugin: string]: Error} | null;
 }> {
-  const state = store.getState();
+  let state = store.getState();
   const {clients, selectedApp, selectedDevice} = state.connections;
   const pluginsToProcess = determinePluginsToProcess(
     clients,
@@ -642,31 +427,21 @@ async function getStoreExport(
 
   statusUpdate?.('Preparing to process data queues for plugins...');
   await processQueues(store, pluginsToProcess, statusUpdate, idler);
+  state = store.getState();
 
   statusUpdate && statusUpdate('Preparing to fetch metadata from client...');
   const fetchMetaDataMarker = `${EXPORT_FLIPPER_TRACE_EVENT}:fetch-meta-data`;
   performance.mark(fetchMetaDataMarker);
 
   const client = clients.find((client) => client.id === selectedApp);
-  const metadata = await fetchMetadata(
-    pluginsToProcess,
-    state.pluginStates,
-    state,
-    statusUpdate,
-    idler,
-  );
-  const newPluginState = metadata.pluginStates;
 
-  // TODO: support async export like fetchMetaData T68683476
-  // TODO: support device plugins T70582933
   const pluginStates2 = pluginsToProcess
-    ? exportSandyPluginStates(pluginsToProcess)
+    ? await exportSandyPluginStates(pluginsToProcess, idler, statusUpdate)
     : {};
 
   getLogger().trackTimeSince(fetchMetaDataMarker, fetchMetaDataMarker, {
     plugins: state.plugins.selectedPlugins,
   });
-  const {errors} = metadata;
 
   const {activeNotifications} = state.notifications;
   const {devicePlugins, clientPlugins} = state.plugins;
@@ -674,7 +449,6 @@ async function getStoreExport(
     {
       activeNotifications,
       device: selectedDevice,
-      pluginStates: newPluginState,
       pluginStates2,
       clients: client ? [client.toJSON()] : [],
       devicePlugins,
@@ -685,14 +459,14 @@ async function getStoreExport(
     },
     idler,
   );
-  return {exportData, fetchMetaDataErrors: errors};
+  return {exportData, fetchMetaDataErrors: null};
 }
 
 export async function exportStore(
   store: MiddlewareAPI,
   includeSupportDetails?: boolean,
-  idler?: Idler,
-  statusUpdate?: (msg: string) => void,
+  idler: Idler = new TestIdler(true),
+  statusUpdate: (msg: string) => void = () => {},
 ): Promise<{
   serializedString: string;
   fetchMetaDataErrors: {
@@ -764,34 +538,22 @@ export function importDataToStore(source: string, data: string, store: Store) {
   if (device == null) {
     return;
   }
-  const {serial, deviceType, title, os, logs} = device;
+  const {serial, deviceType, title, os} = device;
 
   const archivedDevice = new ArchivedDevice({
     serial,
     deviceType,
     title,
     os,
-    logEntries: logs
-      ? logs.map((l) => {
-          return {...l, date: new Date(l.date)};
-        })
-      : [],
     screenshotHandle: deviceScreenshot,
     source,
     supportRequestDetails,
   });
-  const devices = store.getState().connections.devices;
-  const matchedDevices = devices.filter(
-    (availableDevice) => availableDevice.serial === serial,
+  archivedDevice.loadDevicePlugins(
+    store.getState().plugins.devicePlugins,
+    store.getState().connections.enabledDevicePlugins,
+    device.pluginStates,
   );
-  if (matchedDevices.length > 0) {
-    store.dispatch({
-      type: 'SELECT_DEVICE',
-      payload: matchedDevices[0],
-    });
-    return;
-  }
-  archivedDevice.loadDevicePlugins(store.getState().plugins.devicePlugins);
   store.dispatch({
     type: 'REGISTER_DEVICE',
     payload: archivedDevice,
@@ -801,34 +563,9 @@ export function importDataToStore(source: string, data: string, store: Store) {
     payload: archivedDevice,
   });
 
-  const {pluginStates} = json.store;
-  const processedPluginStates: PluginStatesState = deserializePluginStates(
-    pluginStates,
-    store.getState().plugins.clientPlugins,
-    store.getState().plugins.devicePlugins,
-  );
-  const keys = Object.keys(processedPluginStates);
-  keys.forEach((key) => {
-    store.dispatch({
-      type: 'SET_PLUGIN_STATE',
-      payload: {
-        pluginKey: key,
-        state: processedPluginStates[key],
-      },
-    });
-  });
-
   clients.forEach((client: {id: string; query: ClientQuery}) => {
     const sandyPluginStates = json.pluginStates2[client.id] || {};
-    const clientPlugins: Array<string> = [
-      ...keys
-        .filter((key) => {
-          const plugin = deconstructPluginKey(key);
-          return plugin.type === 'client' && client.id === plugin.client;
-        })
-        .map((pluginKey) => deconstructPluginKey(pluginKey).pluginName),
-      ...Object.keys(sandyPluginStates),
-    ];
+    const clientPlugins = new Set(Object.keys(sandyPluginStates));
     store.dispatch({
       type: 'NEW_CLIENT',
       payload: new Client(

@@ -24,7 +24,6 @@ import {
 import {PluginDefinition, DevicePluginMap, ClientPluginMap} from './plugin';
 import {connect} from 'react-redux';
 import React, {Component, Fragment} from 'react';
-import {clipboard} from 'electron';
 import {
   PluginNotification,
   updatePluginBlocklist,
@@ -35,6 +34,7 @@ import {State as StoreState} from './reducers/index';
 import textContent from './utils/textContent';
 import createPaste from './fb-stubs/createPaste';
 import {getPluginTitle} from './utils/pluginUtils';
+import {getFlipperLib} from 'flipper-plugin';
 
 type OwnProps = {
   onClear: () => void;
@@ -157,42 +157,41 @@ class NotificationsTable extends Component<Props & SearchableProps, State> {
     );
   };
 
-  getFilter = (): ((n: PluginNotification) => boolean) => (
-    n: PluginNotification,
-  ) => {
-    const searchTerm = this.props.searchTerm.toLowerCase();
+  getFilter =
+    (): ((n: PluginNotification) => boolean) => (n: PluginNotification) => {
+      const searchTerm = this.props.searchTerm.toLowerCase();
 
-    // filter plugins
-    const blocklistedPlugins = new Set(
-      this.props.blocklistedPlugins.map((p) => p.toLowerCase()),
-    );
-    if (blocklistedPlugins.has(n.pluginId.toLowerCase())) {
-      return false;
-    }
-
-    // filter categories
-    const {category} = n.notification;
-    if (category) {
-      const blocklistedCategories = new Set(
-        this.props.blocklistedCategories.map((p) => p.toLowerCase()),
+      // filter plugins
+      const blocklistedPlugins = new Set(
+        this.props.blocklistedPlugins.map((p) => p.toLowerCase()),
       );
-      if (blocklistedCategories.has(category.toLowerCase())) {
+      if (blocklistedPlugins.has(n.pluginId.toLowerCase())) {
         return false;
       }
-    }
 
-    if (searchTerm.length === 0) {
-      return true;
-    } else if (n.notification.title.toLowerCase().indexOf(searchTerm) > -1) {
-      return true;
-    } else if (
-      typeof n.notification.message === 'string' &&
-      n.notification.message.toLowerCase().indexOf(searchTerm) > -1
-    ) {
-      return true;
-    }
-    return false;
-  };
+      // filter categories
+      const {category} = n.notification;
+      if (category) {
+        const blocklistedCategories = new Set(
+          this.props.blocklistedCategories.map((p) => p.toLowerCase()),
+        );
+        if (blocklistedCategories.has(category.toLowerCase())) {
+          return false;
+        }
+      }
+
+      if (searchTerm.length === 0) {
+        return true;
+      } else if (n.notification.title.toLowerCase().indexOf(searchTerm) > -1) {
+        return true;
+      } else if (
+        typeof n.notification.message === 'string' &&
+        n.notification.message.toLowerCase().indexOf(searchTerm) > -1
+      ) {
+        return true;
+      }
+      return false;
+    };
 
   getPlugin = (id: string) =>
     this.props.clientPlugins.get(id) || this.props.devicePlugins.get(id);
@@ -460,7 +459,7 @@ class NotificationItem extends Component<
     createPaste(this.getContent());
   };
 
-  copy = () => clipboard.writeText(this.getContent());
+  copy = () => getFlipperLib().writeTextToClipboard(this.getContent());
 
   getContent = (): string =>
     [

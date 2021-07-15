@@ -28,9 +28,9 @@ export const pluginCacheDir = path.join(flipperDataDir, 'plugins');
 
 export async function getPluginSourceFolders(): Promise<string[]> {
   const pluginFolders: string[] = [];
-  if (process.env.FLIPPER_NO_EMBEDDED_PLUGINS) {
+  if (process.env.FLIPPER_NO_DEFAULT_PLUGINS) {
     console.log(
-      '🥫  Skipping embedded plugins because "--no-embedded-plugins" flag provided',
+      '🥫  Skipping default plugins because "--no-default-plugins" flag provided',
     );
     return pluginFolders;
   }
@@ -41,7 +41,7 @@ export async function getPluginSourceFolders(): Promise<string[]> {
       pluginFolders.push(...config.pluginPaths);
     }
   }
-  pluginFolders.push(path.resolve(__dirname, '..', '..', 'plugins'));
+  pluginFolders.push(path.resolve(__dirname, '..', '..', 'plugins', 'public'));
   pluginFolders.push(path.resolve(__dirname, '..', '..', 'plugins', 'fb'));
   return pluginFolders.map(expandTilde).filter(fs.existsSync);
 }

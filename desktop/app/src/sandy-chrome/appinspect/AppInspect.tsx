@@ -8,21 +8,26 @@
  */
 
 import React from 'react';
-import {Alert} from 'antd';
+import {Typography} from 'antd';
 import {LeftSidebar, SidebarTitle, InfoIcon} from '../LeftSidebar';
 import {Layout, Link, styled} from '../../ui';
-import {theme} from 'flipper-plugin';
+import {theme, useValue} from 'flipper-plugin';
 import {AppSelector} from './AppSelector';
-import {useStore} from '../../utils/useStore';
 import {PluginList} from './PluginList';
 import ScreenCaptureButtons from '../../chrome/ScreenCaptureButtons';
 import MetroButton from '../../chrome/MetroButton';
 import {BookmarkSection} from './BookmarkSection';
-import {useMemoize} from '../../utils/useMemoize';
 import Client from '../../Client';
-import {State} from '../../reducers';
 import BaseDevice from '../../devices/BaseDevice';
-import MetroDevice from '../../devices/MetroDevice';
+import {ExclamationCircleOutlined, FieldTimeOutlined} from '@ant-design/icons';
+import {useSelector} from 'react-redux';
+import {
+  getActiveClient,
+  getActiveDevice,
+  getMetroDevice,
+} from '../../selectors/connections';
+
+const {Text} = Typography;
 
 const appTooltip = (
   <>
@@ -36,23 +41,11 @@ const appTooltip = (
 );
 
 export function AppInspect() {
-  const connections = useStore((state) => state.connections);
-
-  const metroDevice = useMemoize(findMetroDevice, [connections.devices]);
-  const client = useMemoize(findBestClient, [
-    connections.clients,
-    connections.selectedApp,
-    connections.userPreferredApp,
-  ]);
-  // // if the selected device is Metro, we want to keep the owner of the selected App as active device if possible
-  const activeDevice = useMemoize(findBestDevice, [
-    client,
-    connections.devices,
-    connections.selectedDevice,
-    metroDevice,
-    connections.userPreferredDevice,
-  ]);
-  const isArchived = !!activeDevice?.isArchived;
+  const metroDevice = useSelector(getMetroDevice);
+  const client = useSelector(getActiveClient);
+  const activeDevice = useSelector(getActiveDevice);
+  const isDeviceConnected = useValue(activeDevice?.connected, false);
+  const isAppConnected = useValue(client?.connected, false);
 
   return (
     <LeftSidebar>
@@ -63,18 +56,17 @@ export function AppInspect() {
           </SidebarTitle>
           <Layout.Container padv="small" padh="medium" gap={theme.space.large}>
             <AppSelector />
-            {isArchived ? (
-              <Alert
-                message="This device is a snapshot and cannot be interacted with."
-                type="info"
-              />
-            ) : (
-              <BookmarkSection />
+            {renderStatusMessage(
+              isDeviceConnected,
+              activeDevice,
+              client,
+              isAppConnected,
             )}
-            {!isArchived && activeDevice && (
+            {isDeviceConnected && isAppConnected && <BookmarkSection />}
+            {isDeviceConnected && activeDevice && (
               <Toolbar gap>
-                <MetroButton useSandy />
-                <ScreenCaptureButtons useSandy />
+                <MetroButton />
+                <ScreenCaptureButtons />
               </Toolbar>
             )}
           </Layout.Container>
@@ -99,43 +91,69 @@ const Toolbar = styled(Layout.Horizontal)({
   },
 });
 
-export function findBestClient(
-  clients: Client[],
-  selectedApp: string | null,
-  userPreferredApp: string | null,
-): Client | undefined {
-  return clients.find((c) => c.id === (selectedApp || userPreferredApp));
-}
-
-export function findMetroDevice(
-  devices: State['connections']['devices'],
-): MetroDevice | undefined {
-  return devices?.find(
-    (device) => device.os === 'Metro' && !device.isArchived,
-  ) as MetroDevice;
-}
-
-export function findBestDevice(
-  client: Client | undefined,
-  devices: State['connections']['devices'],
-  selectedDevice: BaseDevice | null,
-  metroDevice: BaseDevice | undefined,
-  userPreferredDevice: string | null,
-): BaseDevice | undefined {
-  // if not Metro device, use the selected device as metro device
-  const selected = selectedDevice ?? undefined;
-  if (selected !== metroDevice) {
-    return selected;
+function renderStatusMessage(
+  isDeviceConnected: boolean,
+  activeDevice: BaseDevice | null,
+  client: Client | null,
+  isAppConnected: boolean,
+): React.ReactNode {
+  if (!activeDevice) {
+    return;
   }
-  // if there is an active app, use device owning the app
-  if (client) {
-    return client.deviceSync;
-  }
-  // if no active app, use the preferred device
-  if (userPreferredDevice) {
-    return (
-      devices.find((device) => device.title === userPreferredDevice) ?? selected
-    );
-  }
-  return selected;
+  return !isDeviceConnected ? (
+    activeDevice.isArchived ? (
+      <Layout.Horizontal gap center>
+        <FieldTimeOutlined style={{color: theme.primaryColor}} />
+        <Text
+          type="secondary"
+          style={{
+            textTransform: 'uppercase',
+            fontSize: '0.8em',
+          }}>
+          Imported device
+        </Text>
+      </Layout.Horizontal>
+    ) : (
+      <Layout.Horizontal gap center>
+        <ExclamationCircleOutlined style={{color: theme.errorColor}} />
+        <Text
+          type="secondary"
+          style={{
+            textTransform: 'uppercase',
+            fontSize: '0.8em',
+            color: theme.errorColor,
+          }}>
+          Device disconnected
+        </Text>
+      </Layout.Horizontal>
+    )
+  ) : client ? (
+    isAppConnected ? null /*connected*/ : (
+      <Layout.Horizontal gap center>
+        <ExclamationCircleOutlined style={{color: theme.errorColor}} />
+        <Text
+          type="secondary"
+          style={{
+            textTransform: 'uppercase',
+            fontSize: '0.8em',
+            color: theme.errorColor,
+          }}>
+          Application disconnected
+        </Text>
+      </Layout.Horizontal>
+    )
+  ) : (
+    <Layout.Horizontal gap center>
+      <ExclamationCircleOutlined style={{color: theme.warningColor}} />
+      <Text
+        type="secondary"
+        style={{
+          textTransform: 'uppercase',
+          fontSize: '0.8em',
+          color: theme.errorColor,
+        }}>
+        No application selected
+      </Text>
+    </Layout.Horizontal>
+  );
 }

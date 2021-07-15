@@ -8,16 +8,15 @@
  */
 
 import React, {useEffect, useState, useCallback} from 'react';
-import {TrackingScope, useLogger} from 'flipper-plugin';
-import {styled} from '../ui';
-import {Layout, Sidebar} from '../ui';
+import {TrackingScope, useLogger, _Sidebar, Layout} from 'flipper-plugin';
+import {Link, styled} from '../ui';
 import {theme} from 'flipper-plugin';
+import {ipcRenderer} from 'electron';
+import {Logger} from '../fb-interfaces/Logger';
 
 import {LeftRail} from './LeftRail';
-import {registerStartupTime} from '../chrome/LegacyApp';
 import {useStore, useDispatch} from '../utils/useStore';
-import {SandyContext} from './SandyContext';
-import {ConsoleLogs} from '../chrome/ConsoleLogs';
+import {FlipperDevTools} from '../chrome/FlipperDevTools';
 import {setStaticView} from '../reducers/connections';
 import {
   ACTIVE_SHEET_CHANGELOG_RECENT_ONLY,
@@ -30,10 +29,14 @@ import {ContentContainer} from './ContentContainer';
 import {Notification} from './notification/Notification';
 import {SheetRenderer} from '../chrome/SheetRenderer';
 import {hasNewChangesToShow} from '../chrome/ChangelogSheet';
-import {SandyWelcomScreen} from './SandyWelcomeScreen';
 import {getVersionString} from '../utils/versionString';
 import config from '../fb-stubs/config';
 import {WelcomeScreenStaticView} from './WelcomeScreen';
+import QPL, {QuickLogActionType, FLIPPER_QPL_EVENTS} from '../fb-stubs/QPL';
+import fbConfig from '../fb-stubs/config';
+import {isFBEmployee} from '../utils/fbEmployee';
+import {notification} from 'antd';
+import isProduction from '../utils/isProduction';
 
 export type ToplevelNavItem =
   | 'appinspect'
@@ -58,9 +61,8 @@ export function SandyApp() {
    * The logic here is to sync both, but without modifying the navigation related reducers to not break classic Flipper.
    * It is possible to simplify this in the future.
    */
-  const [toplevelSelection, setStoredToplevelSelection] = useState<
-    ToplevelNavItem
-  >('appinspect');
+  const [toplevelSelection, setStoredToplevelSelection] =
+    useState<ToplevelNavItem>('appinspect');
 
   // Handle toplevel nav clicks from LeftRail
   const setToplevelSelection = useCallback(
@@ -77,7 +79,7 @@ export function SandyApp() {
       }
       switch (newSelection) {
         case 'flipperlogs':
-          dispatch(setStaticView(ConsoleLogs));
+          dispatch(setStaticView(FlipperDevTools));
           break;
         default:
       }
@@ -99,6 +101,30 @@ export function SandyApp() {
     // eslint-disable-next-line
   }, []);
 
+  useEffect(() => {
+    if (fbConfig.warnFBEmployees && isProduction()) {
+      isFBEmployee().then((isEmployee) => {
+        if (isEmployee) {
+          notification.warning({
+            placement: 'bottomLeft',
+            message: 'Please use Flipper@FB',
+            description: (
+              <>
+                You are using the open-source version of Flipper. Install the
+                internal build from{' '}
+                <Link href="munki://detail-Flipper">
+                  Managed Software Center
+                </Link>{' '}
+                to get access to more plugins.
+              </>
+            ),
+            duration: null,
+          });
+        }
+      });
+    }
+  }, []);
+
   const leftMenuContent = !leftSidebarVisible ? null : toplevelSelection ===
     'appinspect' ? (
     <AppInspect />
@@ -107,53 +133,48 @@ export function SandyApp() {
   ) : null;
 
   return (
-    <SandyContext.Provider value={true}>
-      <Layout.Top>
-        <>
-          <SheetRenderer logger={logger} />
-          <SandyWelcomScreen />
-        </>
-        <Layout.Left>
-          <Layout.Horizontal>
-            <LeftRail
-              toplevelSelection={toplevelSelection}
-              setToplevelSelection={setToplevelSelection}
-            />
-            <Sidebar width={250} minWidth={220} maxWidth={800} gutter>
-              {leftMenuContent && (
-                <TrackingScope scope={toplevelSelection!}>
-                  {leftMenuContent}
-                </TrackingScope>
-              )}
-            </Sidebar>
-          </Layout.Horizontal>
-          <MainContainer>
-            {outOfContentsContainer}
-            {staticView ? (
-              <TrackingScope
-                scope={
-                  (staticView as any).displayName ??
-                  staticView.name ??
-                  staticView.constructor?.name ??
-                  'unknown static view'
-                }>
-                {staticView === WelcomeScreenStaticView ? (
-                  React.createElement(staticView) /* avoid shadow */
-                ) : (
-                  <ContentContainer>
-                    {React.createElement(staticView, {
-                      logger: logger,
-                    })}
-                  </ContentContainer>
-                )}
+    <Layout.Top>
+      <SheetRenderer logger={logger} />
+      <Layout.Left>
+        <Layout.Horizontal>
+          <LeftRail
+            toplevelSelection={toplevelSelection}
+            setToplevelSelection={setToplevelSelection}
+          />
+          <_Sidebar width={250} minWidth={220} maxWidth={800} gutter>
+            {leftMenuContent && (
+              <TrackingScope scope={toplevelSelection!}>
+                {leftMenuContent}
               </TrackingScope>
-            ) : (
-              <PluginContainer logger={logger} isSandy />
             )}
-          </MainContainer>
-        </Layout.Left>
-      </Layout.Top>
-    </SandyContext.Provider>
+          </_Sidebar>
+        </Layout.Horizontal>
+        <MainContainer>
+          {staticView ? (
+            <TrackingScope
+              scope={
+                (staticView as any).displayName ??
+                staticView.name ??
+                staticView.constructor?.name ??
+                'unknown static view'
+              }>
+              {staticView === WelcomeScreenStaticView ? (
+                React.createElement(staticView) /* avoid shadow */
+              ) : (
+                <ContentContainer>
+                  {React.createElement(staticView, {
+                    logger: logger,
+                  })}
+                </ContentContainer>
+              )}
+            </TrackingScope>
+          ) : (
+            <PluginContainer logger={logger} />
+          )}
+          {outOfContentsContainer}
+        </MainContainer>
+      </Layout.Left>
+    </Layout.Top>
   );
 }
 
@@ -183,3 +204,23 @@ const MainContainer = styled(Layout.Container)({
   background: theme.backgroundWash,
   padding: `${theme.space.large}px ${theme.space.large}px ${theme.space.large}px 0`,
 });
+
+function registerStartupTime(logger: Logger) {
+  // track time since launch
+  const [s, ns] = process.hrtime();
+  const launchEndTime = s * 1e3 + ns / 1e6;
+  ipcRenderer.on('getLaunchTime', (_: any, launchStartTime: number) => {
+    logger.track('performance', 'launchTime', launchEndTime - launchStartTime);
+
+    QPL.markerStart(FLIPPER_QPL_EVENTS.STARTUP, 0, launchStartTime);
+    QPL.markerEnd(
+      FLIPPER_QPL_EVENTS.STARTUP,
+      QuickLogActionType.SUCCESS,
+      0,
+      launchEndTime,
+    );
+  });
+
+  ipcRenderer.send('getLaunchTime');
+  ipcRenderer.send('componentDidMount');
+}

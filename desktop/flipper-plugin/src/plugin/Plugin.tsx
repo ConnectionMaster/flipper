@@ -12,6 +12,7 @@ import {BasePluginInstance, BasePluginClient} from './PluginBase';
 import {FlipperLib} from './FlipperLib';
 import {RealFlipperDevice} from './DevicePlugin';
 import {batched} from '../state/batch';
+import {Atom, createState, ReadOnlyAtom} from '../state/atom';
 
 type EventsContract = Record<string, any>;
 type MethodsContract = Record<string, (params: any) => Promise<any>>;
@@ -26,7 +27,7 @@ type Message = {
  */
 export interface PluginClient<
   Events extends EventsContract = {},
-  Methods extends MethodsContract = {}
+  Methods extends MethodsContract = {},
 > extends BasePluginClient {
   /**
    * Identifier that uniquely identifies the connected application
@@ -37,6 +38,9 @@ export interface PluginClient<
    * Registered name for the connected application
    */
   readonly appName: string;
+
+  readonly isConnected: boolean;
+  readonly connected: ReadOnlyAtom<boolean>;
 
   /**
    * the onConnect event is fired whenever the plugin is connected to it's counter part on the device.
@@ -85,11 +89,6 @@ export interface PluginClient<
   supportsMethod(method: keyof Methods): Promise<boolean>;
 
   /**
-   * Checks if the provided plugin is available for the current device / application
-   */
-  isPluginAvailable(pluginId: string): boolean;
-
-  /**
    * opens a different plugin by id, optionally providing a deeplink to bring the plugin to a certain state
    */
   selectPlugin(pluginId: string, deeplinkPayload?: unknown): void;
@@ -101,6 +100,7 @@ export interface PluginClient<
  */
 export interface RealFlipperClient {
   id: string;
+  connected: Atom<boolean>;
   query: {
     app: string;
     os: string;
@@ -108,7 +108,7 @@ export interface RealFlipperClient {
     device_id: string;
   };
   deviceSync: RealFlipperDevice;
-  plugins: string[];
+  plugins: Set<string>;
   isBackgroundPlugin(pluginId: string): boolean;
   initPlugin(pluginId: string): void;
   deinitPlugin(pluginId: string): void;
@@ -123,7 +123,7 @@ export interface RealFlipperClient {
 
 export type PluginFactory<
   Events extends EventsContract,
-  Methods extends MethodsContract
+  Methods extends MethodsContract,
 > = (client: PluginClient<Events, Methods>) => object;
 
 export type FlipperPluginComponent = React.FC<{}>;
@@ -134,21 +134,29 @@ export class SandyPluginInstance extends BasePluginInstance {
   }
 
   /** base client provided by Flipper */
-  realClient: RealFlipperClient;
+  readonly realClient: RealFlipperClient;
   /** client that is bound to this instance */
-  client: PluginClient<any, any>;
+  readonly client: PluginClient<any, any>;
   /** connection alive? */
-  connected = false;
+  readonly connected = createState(false);
 
   constructor(
     flipperLib: FlipperLib,
     definition: SandyPluginDefinition,
     realClient: RealFlipperClient,
+    pluginKey: string,
     initialStates?: Record<string, any>,
   ) {
-    super(flipperLib, definition, realClient.deviceSync, initialStates);
+    super(
+      flipperLib,
+      definition,
+      realClient.deviceSync,
+      pluginKey,
+      initialStates,
+    );
     this.realClient = realClient;
     this.definition = definition;
+    const self = this;
     this.client = {
       ...this.createBasePluginClient(),
       get appId() {
@@ -156,6 +164,10 @@ export class SandyPluginInstance extends BasePluginInstance {
       },
       get appName() {
         return realClient.query.app;
+      },
+      connected: self.connected,
+      get isConnected() {
+        return self.connected.get();
       },
       onConnect: (cb) => {
         this.events.on('connect', batched(cb));
@@ -185,22 +197,13 @@ export class SandyPluginInstance extends BasePluginInstance {
           method as any,
         );
       },
-      isPluginAvailable(pluginId: string) {
-        return flipperLib.isPluginAvailable(
+      selectPlugin(pluginId: string, deeplink?: unknown) {
+        flipperLib.selectPlugin(
           realClient.deviceSync,
           realClient,
           pluginId,
+          deeplink,
         );
-      },
-      selectPlugin(pluginId: string, deeplink?: unknown) {
-        if (this.isPluginAvailable(pluginId)) {
-          flipperLib.selectPlugin(
-            realClient.deviceSync,
-            realClient,
-            pluginId,
-            deeplink,
-          );
-        }
       },
     };
     this.initializePlugin(() =>
@@ -212,7 +215,10 @@ export class SandyPluginInstance extends BasePluginInstance {
   activate() {
     super.activate();
     const pluginId = this.definition.id;
-    if (!this.connected && !this.realClient.isBackgroundPlugin(pluginId)) {
+    if (
+      !this.connected.get() &&
+      !this.realClient.isBackgroundPlugin(pluginId)
+    ) {
       this.realClient.initPlugin(pluginId); // will call connect() if needed
     }
   }
@@ -221,29 +227,29 @@ export class SandyPluginInstance extends BasePluginInstance {
   deactivate() {
     super.deactivate();
     const pluginId = this.definition.id;
-    if (this.connected && !this.realClient.isBackgroundPlugin(pluginId)) {
+    if (this.connected.get() && !this.realClient.isBackgroundPlugin(pluginId)) {
       this.realClient.deinitPlugin(pluginId);
     }
   }
 
   connect() {
     this.assertNotDestroyed();
-    if (!this.connected) {
-      this.connected = true;
+    if (!this.connected.get()) {
+      this.connected.set(true);
       this.events.emit('connect');
     }
   }
 
   disconnect() {
     this.assertNotDestroyed();
-    if (this.connected) {
-      this.connected = false;
+    if (this.connected.get()) {
+      this.connected.set(false);
       this.events.emit('disconnect');
     }
   }
 
   destroy() {
-    if (this.connected) {
+    if (this.connected.get()) {
       this.realClient.deinitPlugin(this.definition.id);
     }
     super.destroy();
@@ -265,7 +271,13 @@ export class SandyPluginInstance extends BasePluginInstance {
 
   private assertConnected() {
     this.assertNotDestroyed();
-    if (!this.connected) {
+    if (
+      // This is a better-safe-than-sorry; just the first condition should suffice
+      !this.connected.get() ||
+      !this.realClient.connected.get() ||
+      !this.device.isConnected ||
+      this.device.isArchived
+    ) {
       throw new Error('Plugin is not connected');
     }
   }

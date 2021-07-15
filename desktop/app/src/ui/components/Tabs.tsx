@@ -16,6 +16,7 @@ import Tab, {Props as TabProps} from './Tab';
 import {Property} from 'csstype';
 import React, {useContext} from 'react';
 import {TabsContext} from './TabsContainer';
+import {theme, _wrapInteractionHandler} from 'flipper-plugin';
 
 const TabList = styled(FlexRow)({
   justifyContent: 'center',
@@ -34,14 +35,22 @@ const TabListItem = styled.div<{
       ? 'linear-gradient(to bottom, #67a6f7 0%, #0072FA 100%)'
       : `linear-gradient(to bottom, white 0%,${colors.macOSTitleBarButtonBackgroundBlur} 100%)`
     : props.active
-    ? colors.light15
-    : colors.light02,
-  borderBottom: props.container ? '1px solid #B8B8B8' : '1px solid #dddfe2',
+    ? theme.primaryColor
+    : theme.backgroundWash,
+  borderBottom: props.container
+    ? '1px solid #B8B8B8'
+    : `1px solid ${theme.dividerColor}`,
   boxShadow:
     props.active && props.container
       ? 'inset 0px 0px 3px rgba(0,0,0,0.25)'
       : 'none',
-  color: props.container && props.active ? colors.white : colors.dark80,
+  color: props.container
+    ? props.active
+      ? colors.white
+      : colors.dark80
+    : props.active
+    ? colors.white
+    : theme.textColorPrimary,
   flex: props.container ? 'unset' : 1,
   top: props.container ? -11 : 0,
   fontWeight: 500,
@@ -62,7 +71,7 @@ const TabListItem = styled.div<{
     borderBottomRightRadius: props.container ? 3 : 0,
   },
   '&:hover': {
-    backgroundColor: props.active ? colors.light15 : colors.light05,
+    backgroundColor: theme.backgroundTransparentHover,
   },
 }));
 TabListItem.displayName = 'Tabs:TabListItem';
@@ -76,7 +85,7 @@ const TabListAddItem = styled(TabListItem)({
 TabListAddItem.displayName = 'Tabs:TabListAddItem';
 
 const CloseButton = styled.div({
-  color: '#000',
+  color: theme.textColorPrimary,
   float: 'right',
   fontSize: 10,
   fontWeight: 'bold',
@@ -110,6 +119,7 @@ TabContent.displayName = 'Tabs:TabContent';
 
 /**
  * A Tabs component.
+ * @deprecated use Tabs from flipper-plugin
  */
 export default function Tabs(props: {
   /**
@@ -168,6 +178,7 @@ export default function Tabs(props: {
   classic?: boolean;
 }) {
   let tabsContainer = useContext(TabsContext);
+  const scope = useContext((global as any).FlipperTrackingScopeContext);
   if (props.classic === true) {
     tabsContainer = false;
   }
@@ -245,11 +256,17 @@ export default function Tabs(props: {
           container={tabsContainer}
           onMouseDown={
             !isActive && onActive
-              ? (event: React.MouseEvent<HTMLDivElement>) => {
-                  if (event.target !== closeButton) {
-                    onActive(key);
-                  }
-                }
+              ? _wrapInteractionHandler(
+                  (event: React.MouseEvent<HTMLDivElement>) => {
+                    if (event.target !== closeButton) {
+                      onActive(key);
+                    }
+                  },
+                  'Tabs',
+                  'onTabClick',
+                  scope as any,
+                  'tab:' + key + ':' + comp.props.label,
+                )
               : undefined
           }>
           {comp.props.label}
@@ -306,7 +323,7 @@ export default function Tabs(props: {
   }
 
   return (
-    <FlexColumn grow={true}>
+    <FlexColumn grow>
       <TabList>
         {before}
         {tabList}

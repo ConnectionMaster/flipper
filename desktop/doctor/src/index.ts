@@ -46,10 +46,10 @@ export type Healthcheck = {
   run: (
     env: EnvironmentInfo,
     settings?: Settings,
-  ) => Promise<HealthchecRunResult>;
+  ) => Promise<HealthcheckRunResult>;
 };
 
-export type HealthchecRunResult = {
+export type HealthcheckRunResult = {
   hasProblem: boolean;
   message: string;
 };
@@ -114,26 +114,65 @@ export function getHealthchecks(): Healthchecks {
           label: 'SDK Installed',
           isRequired: true,
           run: async (_: EnvironmentInfo) => {
-            if (process.env.ANDROID_HOME) {
-              const androidHome = process.env.ANDROID_HOME;
-              if (!fs.existsSync(androidHome)) {
-                return {
-                  hasProblem: true,
-                  message: `ANDROID_HOME points to a folder which does not exist: ${androidHome}. You can use Flipper Settings (File > Preferences) to point to a different location.`,
-                };
-              }
+            const androidHome = process.env.ANDROID_HOME;
+            const androidSdkRoot = process.env.ANDROID_SDK_ROOT;
+
+            let androidHomeResult: HealthcheckRunResult;
+            if (!androidHome) {
+              androidHomeResult = {
+                hasProblem: true,
+                message: `ANDROID_HOME is not defined. You can use Flipper Settings (File > Preferences) to point to its location.`,
+              };
+            } else if (!fs.existsSync(androidHome)) {
+              androidHomeResult = {
+                hasProblem: true,
+                message: `ANDROID_HOME point to a folder which does not exist: ${androidHome}. You can use Flipper Settings (File > Preferences) to point to a different location.`,
+              };
+            } else {
               const platformToolsDir = path.join(androidHome, 'platform-tools');
-              if (!fs.existsSync(path.join(androidHome, 'platform-tools'))) {
-                return {
+              if (!fs.existsSync(platformToolsDir)) {
+                androidHomeResult = {
                   hasProblem: true,
                   message: `Android SDK Platform Tools not found at the expected location "${platformToolsDir}". Probably they are not installed.`,
                 };
+              } else {
+                androidHomeResult = await tryExecuteCommand(
+                  `"${path.join(platformToolsDir, 'adb')}" version`,
+                );
               }
-              return await tryExecuteCommand(
-                `"${path.join(platformToolsDir, 'adb')}" version`,
-              );
             }
-            return await tryExecuteCommand('adb version');
+            if (androidHomeResult.hasProblem == false) {
+              return androidHomeResult;
+            }
+
+            let androidSdkRootResult: HealthcheckRunResult;
+            if (!androidSdkRoot) {
+              androidSdkRootResult = {
+                hasProblem: true,
+                message: `ANDROID_SDK_ROOT is not defined. You can use Flipper Settings (File > Preferences) to point to its location.`,
+              };
+            } else if (!fs.existsSync(androidSdkRoot)) {
+              androidSdkRootResult = {
+                hasProblem: true,
+                message: `ANDROID_SDK_ROOT point to a folder which does not exist: ${androidSdkRoot}. You can use Flipper Settings (File > Preferences) to point to a different location.`,
+              };
+            } else {
+              const platformToolsDir = path.join(
+                androidSdkRoot,
+                'platform-tools',
+              );
+              if (!fs.existsSync(platformToolsDir)) {
+                androidSdkRootResult = {
+                  hasProblem: true,
+                  message: `Android SDK Platform Tools not found at the expected location "${platformToolsDir}". Probably they are not installed.`,
+                };
+              } else {
+                androidSdkRootResult = await tryExecuteCommand(
+                  `"${path.join(platformToolsDir, 'adb')}" version`,
+                );
+              }
+            }
+            return androidSdkRootResult;
           },
         },
       ],
@@ -262,44 +301,46 @@ export async function runHealthchecks(): Promise<
 > {
   const environmentInfo = await getEnvInfo();
   const healthchecks: Healthchecks = getHealthchecks();
-  const results: Array<
-    CategoryResult | SkippedHealthcheckCategory
-  > = await Promise.all(
-    Object.entries(healthchecks).map(async ([key, category]) => {
-      if (category.isSkipped) {
-        return category;
-      }
-      const categoryResult: CategoryResult = [
-        key,
-        {
-          label: category.label,
-          results: await Promise.all(
-            category.healthchecks.map(
-              async ({key, label, run, isRequired}) => ({
-                key,
-                label,
-                isRequired: isRequired ?? true,
-                result: await run(environmentInfo).catch((e) => {
-                  console.error(e);
-                  // TODO Improve result type to be: OK | Problem(message, fix...)
-                  return {
-                    hasProblem: true,
-                  };
+  const results: Array<CategoryResult | SkippedHealthcheckCategory> =
+    await Promise.all(
+      Object.entries(healthchecks).map(async ([key, category]) => {
+        if (category.isSkipped) {
+          return category;
+        }
+        const categoryResult: CategoryResult = [
+          key,
+          {
+            label: category.label,
+            results: await Promise.all(
+              category.healthchecks.map(
+                async ({key, label, run, isRequired}) => ({
+                  key,
+                  label,
+                  isRequired: isRequired ?? true,
+                  result: await run(environmentInfo).catch((e) => {
+                    console.warn(
+                      `Health check ${key}/${label} failed with:`,
+                      e,
+                    );
+                    // TODO Improve result type to be: OK | Problem(message, fix...)
+                    return {
+                      hasProblem: true,
+                    };
+                  }),
                 }),
-              }),
+              ),
             ),
-          ),
-        },
-      ];
-      return categoryResult;
-    }),
-  );
+          },
+        ];
+        return categoryResult;
+      }),
+    );
   return results;
 }
 
 async function tryExecuteCommand(
   command: string,
-): Promise<HealthchecRunResult> {
+): Promise<HealthcheckRunResult> {
   try {
     const output = await promisify(exec)(command);
     return {

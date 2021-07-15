@@ -8,16 +8,17 @@
  */
 
 import {useMemo} from 'react';
-import {Button, Toolbar, ButtonGroup, Layout} from '../ui';
 import React from 'react';
 import {Console, Hook} from 'console-feed';
 import type {Methods} from 'console-feed/lib/definitions/Methods';
 import type {Styles} from 'console-feed/lib/definitions/Styles';
 import {createState, useValue} from 'flipper-plugin';
-import {useLocalStorage} from '../utils/useLocalStorage';
-import {theme} from 'flipper-plugin';
-import {useIsSandy} from '../sandy-chrome/SandyContext';
+import {useLocalStorageState} from 'flipper-plugin';
+import {theme, Toolbar, Layout} from 'flipper-plugin';
 import {useIsDarkMode} from '../utils/useIsDarkMode';
+import {Button, Dropdown, Menu, Checkbox} from 'antd';
+import {DownOutlined} from '@ant-design/icons';
+import {DeleteOutlined} from '@ant-design/icons';
 
 const MAX_LOG_ITEMS = 1000;
 
@@ -65,48 +66,50 @@ const allLogLevels: Methods[] = [
 const defaultLogLevels: Methods[] = ['warn', 'error', 'table', 'assert'];
 
 export function ConsoleLogs() {
-  const isSandy = useIsSandy();
   const isDarkMode = useIsDarkMode();
   const logs = useValue(logsAtom);
-  const [logLevels, setLogLevels] = useLocalStorage<Methods[]>(
+  const [logLevels, setLogLevels] = useLocalStorageState<Methods[]>(
     'console-logs-loglevels',
     defaultLogLevels,
   );
 
-  const dropdown = useMemo(() => {
-    return allLogLevels.map(
-      (l): Electron.MenuItemConstructorOptions => ({
-        label: l,
-        checked: logLevels.includes(l),
-        type: 'checkbox',
-        click() {
-          setLogLevels((state) =>
-            state.includes(l)
-              ? state.filter((level) => level !== l)
-              : [l, ...state],
-          );
-        },
-      }),
-    );
-  }, [logLevels, setLogLevels]);
-
-  const styles = useMemo(() => buildTheme(isSandy), [isSandy]);
+  const styles = useMemo(buildTheme, []);
 
   return (
     <Layout.Top>
-      <Toolbar>
-        <ButtonGroup>
-          <Button onClick={clearLogs} icon="trash">
-            Clear Logs
+      <Toolbar wash>
+        <Button onClick={clearLogs} icon={<DeleteOutlined />}>
+          Clear Logs
+        </Button>
+        <Dropdown
+          overlay={
+            <Menu>
+              {allLogLevels.map((l) => (
+                <Menu.Item
+                  key={l}
+                  onClick={() => {
+                    setLogLevels((state) =>
+                      state.includes(l)
+                        ? state.filter((level) => level !== l)
+                        : [l, ...state],
+                    );
+                  }}>
+                  <Checkbox checked={logLevels.includes(l)}>{l}</Checkbox>
+                </Menu.Item>
+              ))}
+            </Menu>
+          }>
+          <Button>
+            Log Levels
+            <DownOutlined />
           </Button>
-          <Button dropdown={dropdown}>Log Levels</Button>
-        </ButtonGroup>
+        </Dropdown>
       </Toolbar>
       <Layout.ScrollContainer vertical>
         <Console
           logs={logs}
           filter={logLevels}
-          variant={isDarkMode || !isSandy ? 'dark' : 'light'}
+          variant={isDarkMode ? 'dark' : 'light'}
           styles={styles}
         />
       </Layout.ScrollContainer>
@@ -114,15 +117,7 @@ export function ConsoleLogs() {
   );
 }
 
-function buildTheme(isSandy: boolean): Styles {
-  if (!isSandy) {
-    const bg = '#333';
-    return {
-      BASE_BACKGROUND_COLOR: bg,
-      BASE_COLOR: 'white',
-      LOG_BACKGROUND: bg,
-    };
-  }
+function buildTheme(): Styles {
   return {
     // See: https://github.com/samdenty/console-feed/blob/master/src/definitions/Styles.d.ts
     BASE_BACKGROUND_COLOR: 'transparent',

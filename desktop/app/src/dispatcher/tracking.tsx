@@ -11,7 +11,7 @@ import {ipcRenderer, remote} from 'electron';
 import {performance} from 'perf_hooks';
 import {EventEmitter} from 'events';
 
-import {Store} from '../reducers/index';
+import {State, Store} from '../reducers/index';
 import {Logger} from '../fb-interfaces/Logger';
 import Client from '../Client';
 import {
@@ -22,23 +22,33 @@ import {
   clearTimeline,
   TrackingEvent,
   State as UsageTrackingState,
+  selectionChanged,
 } from '../reducers/usageTracking';
 import produce from 'immer';
 import BaseDevice from '../devices/BaseDevice';
 import {deconstructClientId} from '../utils/clientUtils';
 import {getCPUUsage} from 'process';
+import {sideEffect} from '../utils/sideEffect';
+import {getSelectionInfo} from '../utils/info';
+import type {SelectionInfo} from '../utils/info';
 
 const TIME_SPENT_EVENT = 'time-spent';
 
 type UsageInterval = {
-  plugin: string | null;
+  selectionKey: string | null;
+  selection: SelectionInfo | null;
   length: number;
   focused: boolean;
 };
 
 export type UsageSummary = {
   total: {focusedTime: number; unfocusedTime: number};
-  [pluginName: string]: {focusedTime: number; unfocusedTime: number};
+  plugin: {
+    [pluginKey: string]: {
+      focusedTime: number;
+      unfocusedTime: number;
+    } & SelectionInfo;
+  };
 };
 
 export const fpsEmitter = new EventEmitter();
@@ -66,6 +76,21 @@ export function emitBytesReceived(plugin: string, bytes: number) {
 }
 
 export default (store: Store, logger: Logger) => {
+  sideEffect(
+    store,
+    {
+      name: 'pluginUsageTracking',
+      throttleMs: 0,
+      noTimeBudgetWarns: true,
+      runSynchronously: true,
+    },
+    getSelectionInfo,
+    (selection, store) => {
+      const time = Date.now();
+      store.dispatch(selectionChanged({selection, time}));
+    },
+  );
+
   let droppedFrames: number = 0;
   let largeFrameDrops: number = 0;
 
@@ -81,11 +106,8 @@ export default (store: Store, logger: Logger) => {
       timeSinceLastStartup,
     });
     // create fresh exit data
-    const {
-      selectedDevice,
-      selectedApp,
-      selectedPlugin,
-    } = store.getState().connections;
+    const {selectedDevice, selectedApp, selectedPlugin} =
+      store.getState().connections;
     persistExitData(
       {
         selectedDevice,
@@ -121,14 +143,21 @@ export default (store: Store, logger: Logger) => {
     );
   }
 
-  ipcRenderer.on('trackUsage', (_e, ...args: any[]) => {
-    const state = store.getState();
-    const {
-      selectedDevice,
-      selectedPlugin,
-      selectedApp,
-      clients,
-    } = state.connections;
+  ipcRenderer.on('trackUsage', (event, ...args: any[]) => {
+    let state: State;
+    try {
+      state = store.getState();
+    } catch (e) {
+      // if trackUsage is called (indirectly) through a reducer, this will utterly die Flipper. Let's prevent that and log an error instead
+      console.error(
+        'trackUsage triggered indirectly as side effect of a reducer. Event: ',
+        event.type,
+        event,
+      );
+      return;
+    }
+    const {selectedDevice, selectedPlugin, selectedApp, clients} =
+      state.connections;
 
     persistExitData(
       {selectedDevice, selectedPlugin, selectedApp},
@@ -141,16 +170,27 @@ export default (store: Store, logger: Logger) => {
     store.dispatch(clearTimeline(currentTime));
 
     logger.track('usage', TIME_SPENT_EVENT, usageSummary.total);
-    for (const key of Object.keys(usageSummary)) {
-      logger.track('usage', TIME_SPENT_EVENT, usageSummary[key], key);
+    for (const key of Object.keys(usageSummary.plugin)) {
+      logger.track(
+        'usage',
+        TIME_SPENT_EVENT,
+        usageSummary.plugin[key],
+        usageSummary.plugin[key]?.plugin ?? 'none',
+      );
     }
 
-    Object.entries(state.connections.userStarredPlugins).forEach(
-      ([app, plugins]) =>
+    Object.entries(state.connections.enabledPlugins).forEach(
+      ([app, plugins]) => {
+        // TODO: remove "starred-plugns" event in favor of "enabled-plugins" after some transition period
         logger.track('usage', 'starred-plugins', {
-          app: app,
+          app,
           starredPlugins: plugins,
-        }),
+        });
+        logger.track('usage', 'enabled-plugins', {
+          app,
+          enabledPugins: plugins,
+        });
+      },
     );
 
     const bgStats = getPluginBackgroundStats();
@@ -218,7 +258,8 @@ export function computeUsageSummary(
   const intervals: UsageInterval[] = [];
   let intervalStart = 0;
   let isFocused = false;
-  let selectedPlugin: string | null = null;
+  let selection: SelectionInfo | null = null;
+  let selectionKey: string | null;
 
   function startInterval(event: TrackingEvent) {
     intervalStart = event.time;
@@ -228,20 +269,26 @@ export function computeUsageSummary(
     ) {
       isFocused = event.isFocused;
     }
-    if (event.type === 'PLUGIN_SELECTED') {
-      selectedPlugin = event.plugin;
+    if (event.type === 'SELECTION_CHANGED') {
+      selectionKey = event.selectionKey;
+      selection = event.selection;
     }
   }
   function endInterval(time: number) {
     const length = time - intervalStart;
-    intervals.push({length, plugin: selectedPlugin, focused: isFocused});
+    intervals.push({
+      length,
+      focused: isFocused,
+      selectionKey,
+      selection,
+    });
   }
 
   for (const event of state.timeline) {
     if (
       event.type === 'TIMELINE_START' ||
       event.type === 'WINDOW_FOCUS_CHANGE' ||
-      event.type === 'PLUGIN_SELECTED'
+      event.type === 'SELECTION_CHANGED'
     ) {
       if (event.type !== 'TIMELINE_START') {
         endInterval(event.time);
@@ -256,16 +303,18 @@ export function computeUsageSummary(
       produce(acc, (draft) => {
         draft.total.focusedTime += x.focused ? x.length : 0;
         draft.total.unfocusedTime += x.focused ? 0 : x.length;
-        const pluginName = x.plugin ?? 'none';
-        draft[pluginName] = draft[pluginName] ?? {
+        const selectionKey = x.selectionKey ?? 'none';
+        draft.plugin[selectionKey] = draft.plugin[selectionKey] ?? {
           focusedTime: 0,
           unfocusedTime: 0,
+          ...x.selection,
         };
-        draft[pluginName].focusedTime += x.focused ? x.length : 0;
-        draft[pluginName].unfocusedTime += x.focused ? 0 : x.length;
+        draft.plugin[selectionKey].focusedTime += x.focused ? x.length : 0;
+        draft.plugin[selectionKey].unfocusedTime += x.focused ? 0 : x.length;
       }),
     {
       total: {focusedTime: 0, unfocusedTime: 0},
+      plugin: {},
     },
   );
 }

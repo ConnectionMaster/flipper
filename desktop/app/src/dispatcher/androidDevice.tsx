@@ -13,13 +13,14 @@ import child_process from 'child_process';
 import {Store} from '../reducers/index';
 import BaseDevice from '../devices/BaseDevice';
 import {Logger} from '../fb-interfaces/Logger';
-import {registerDeviceCallbackOnPlugins} from '../utils/onRegisterDevice';
 import {getAdbClient} from '../utils/adbClient';
 import which from 'which';
 import {promisify} from 'util';
 import {ServerPorts} from '../reducers/application';
 import {Client as ADBClient} from 'adbkit';
 import {addErrorNotification} from '../reducers/notifications';
+import {destroyDevice} from '../reducers/connections';
+import {join} from 'path';
 
 function createDevice(
   adbClient: ADBClient,
@@ -47,16 +48,9 @@ function createDevice(
           const isKaiOSDevice = Object.keys(props).some(
             (name) => name.startsWith('kaios') || name.startsWith('ro.kaios'),
           );
-          const androidLikeDevice = new (isKaiOSDevice
-            ? KaiOSDevice
-            : AndroidDevice)(
-            device.id,
-            type,
-            name,
-            adbClient,
-            abiList,
-            sdkVersion,
-          );
+          const androidLikeDevice = new (
+            isKaiOSDevice ? KaiOSDevice : AndroidDevice
+          )(device.id, type, name, adbClient, abiList, sdkVersion);
           if (ports) {
             await androidLikeDevice
               .reverse([ports.secure, ports.insecure])
@@ -67,6 +61,15 @@ function createDevice(
                   `Failed to reverse-proxy ports on device ${androidLikeDevice.serial}: ${e}`,
                 );
               });
+          }
+          if (type === 'physical') {
+            // forward port for React DevTools, which is fixed on React Native
+            await androidLikeDevice.reverse([8097]).catch((e) => {
+              console.warn(
+                `Failed to reverse-proxy React DevTools port 8097 on ${androidLikeDevice.serial}`,
+                e,
+              );
+            });
           }
           resolve(androidLikeDevice);
         } catch (e) {
@@ -138,13 +141,20 @@ export default (store: Store, logger: Logger) => {
   const watchAndroidDevices = () => {
     // get emulators
     promisify(which)('emulator')
-      .catch(() => `${process.env.ANDROID_HOME || ''}/tools/emulator`)
+      .catch(() =>
+        join(
+          process.env.ANDROID_HOME || process.env.ANDROID_SDK_ROOT || '',
+          'tools',
+          'emulator',
+        ),
+      )
       .then((emulatorPath) => {
-        child_process.exec(
-          `${emulatorPath} -list-avds`,
+        child_process.execFile(
+          emulatorPath as string,
+          ['-list-avds'],
           (error: Error | null, data: string | null) => {
             if (error != null || data == null) {
-              console.error(error || 'Failed to list AVDs');
+              console.warn('List AVD failed: ', error);
               return;
             }
             const payload = data.split('\n').filter(Boolean);
@@ -154,9 +164,12 @@ export default (store: Store, logger: Logger) => {
             });
           },
         );
+      })
+      .catch((err) => {
+        console.warn('Failed to query AVDs:', err);
       });
 
-    getAdbClient(store)
+    return getAdbClient(store)
       .then((client) => {
         client
           .trackDevices()
@@ -172,7 +185,7 @@ export default (store: Store, logger: Logger) => {
                   .map((device: BaseDevice) => device.serial);
 
                 unregisterDevices(deviceIDsToRemove);
-                console.error('adb server was shutdown');
+                console.warn('adb server was shutdown');
                 setTimeout(watchAndroidDevices, 500);
               } else {
                 throw err;
@@ -206,7 +219,7 @@ export default (store: Store, logger: Logger) => {
           });
       })
       .catch((e) => {
-        console.error(`Failed to watch for android devices: ${e.message}`);
+        console.warn(`Failed to watch for android devices: ${e.message}`);
       });
   };
 
@@ -231,27 +244,22 @@ export default (store: Store, logger: Logger) => {
       .getState()
       .connections.devices.filter(
         (device: BaseDevice) =>
-          device.serial === androidDevice.serial && device.isArchived,
+          device.serial === androidDevice.serial && !device.connected.get(),
       )
       .map((device) => device.serial);
 
-    store.dispatch({
-      type: 'UNREGISTER_DEVICES',
-      payload: new Set(reconnectedDevices),
+    reconnectedDevices.forEach((serial) => {
+      destroyDevice(store, logger, serial);
     });
 
-    androidDevice.loadDevicePlugins(store.getState().plugins.devicePlugins);
+    androidDevice.loadDevicePlugins(
+      store.getState().plugins.devicePlugins,
+      store.getState().connections.enabledDevicePlugins,
+    );
     store.dispatch({
       type: 'REGISTER_DEVICE',
       payload: androidDevice,
     });
-
-    registerDeviceCallbackOnPlugins(
-      store,
-      store.getState().plugins.devicePlugins,
-      store.getState().plugins.clientPlugins,
-      androidDevice,
-    );
   }
 
   async function unregisterDevices(deviceIds: Array<string>) {
@@ -262,28 +270,11 @@ export default (store: Store, logger: Logger) => {
       }),
     );
 
-    const archivedDevices = deviceIds
-      .map((id) => {
-        const device = store
-          .getState()
-          .connections.devices.find((device) => device.serial === id);
-        if (device && !device.isArchived) {
-          return device.archive();
-        }
-      })
-      .filter(Boolean);
-
-    store.dispatch({
-      type: 'UNREGISTER_DEVICES',
-      payload: new Set(deviceIds),
-    });
-
-    archivedDevices.forEach((device: BaseDevice) => {
-      device.loadDevicePlugins(store.getState().plugins.devicePlugins);
-      store.dispatch({
-        type: 'REGISTER_DEVICE',
-        payload: device,
-      });
+    deviceIds.forEach((id) => {
+      const device = store
+        .getState()
+        .connections.devices.find((device) => device.serial === id);
+      device?.disconnect();
     });
   }
 

@@ -52,7 +52,7 @@ const statusTypeAndMessage: {
   },
   WARNING: {
     type: 'warning',
-    message: 'Doctor has discoverd warnings. Please expand items for details.',
+    message: 'Doctor has discovered warnings. Please expand items for details.',
   },
   SUCCESS: {
     type: 'success',
@@ -83,7 +83,7 @@ function ResultTopDialog(props: {status: HealthcheckStatus}) {
       showIcon
       message={messages.message}
       style={{
-        fontSize: theme.fontSize.smallBody,
+        fontSize: theme.fontSize.small,
         lineHeight: '16px',
         fontWeight: 'bold',
         paddingTop: '10px',
@@ -179,7 +179,7 @@ function SetupDoctorFooter(props: {
           checked={props.acknowledgeCheck}
           onChange={(e) => props.onAcknowledgeCheck(e.target.checked)}
           style={{display: 'flex', alignItems: 'center'}}>
-          <Text style={{fontSize: theme.fontSize.smallBody}}>
+          <Text style={{fontSize: theme.fontSize.small}}>
             Do not show warning about these problems at startup
           </Text>
         </Checkbox>
@@ -212,9 +212,10 @@ export default function SetupDoctorScreen(props: {
   const [acknowlodgeProblem, setAcknowlodgeProblem] = useState(
     checkHasNewProblem(healthcheckReport.result),
   );
-  const hasProblem = useMemo(() => checkHasProblem(healthcheckReport.result), [
-    healthcheckReport,
-  ]);
+  const hasProblem = useMemo(
+    () => checkHasProblem(healthcheckReport.result),
+    [healthcheckReport],
+  );
   const onCloseModal = useCallback(() => {
     const hasNewProblem = checkHasNewProblem(healthcheckReport.result);
     if (acknowlodgeProblem) {

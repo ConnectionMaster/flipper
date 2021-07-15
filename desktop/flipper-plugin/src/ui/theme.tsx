@@ -7,8 +7,9 @@
  * @format
  */
 
-// Exposes all the variables defined in themes/base.less:
+import * as antColors from '@ant-design/colors';
 
+// Exposes all the variables defined in themes/base.less:
 export const theme = {
   white: 'white', // use as counter color for primary
   black: 'black',
@@ -19,6 +20,8 @@ export const theme = {
   textColorPrimary: 'var(--flipper-text-color-primary)',
   textColorSecondary: 'var(--flipper-text-color-secondary)',
   textColorPlaceholder: 'var(--flipper-text-color-placeholder)',
+  textColorActive: 'var(--light-color-button-active)',
+  searchHighlightBackground: antColors.yellow[3],
   disabledColor: 'var(--flipper-disabled-color)',
   backgroundDefault: 'var(--flipper-background-default)',
   backgroundWash: 'var(--flipper-background-wash)',
@@ -38,11 +41,32 @@ export const theme = {
     huge: 24,
   } as const,
   fontSize: {
-    smallBody: '12px',
+    large: '16px',
+    default: '14px',
+    small: '12px',
   } as const,
+  monospace: {
+    fontFamily: 'SF Mono,Monaco,Andale Mono,monospace',
+    fontSize: '12px',
+  } as const,
+  bold: 600,
+  semanticColors: {
+    attribute: antColors.orange[5],
+    nullValue: antColors.grey.primary!,
+    stringValue: antColors.orange[5],
+    colorValue: antColors.cyan[5],
+    booleanValue: antColors.magenta[5],
+    numberValue: antColors.blue[5],
+    diffAddedBackground: antColors.lime[1],
+    diffRemovedBackground: antColors.volcano[1],
+  },
 } as const;
 
-export type Spacing = keyof typeof theme['space'] | number | undefined | true;
+export type Spacing =
+  | keyof typeof theme['space']
+  | number
+  | undefined
+  | boolean;
 
 export type PaddingProps = {
   padv?: Spacing;
@@ -67,7 +91,7 @@ export function normalizePadding({
 export function normalizeSpace(spacing: Spacing, defaultSpace: number): number {
   return spacing === true
     ? defaultSpace
-    : spacing === undefined
+    : spacing === undefined || spacing === false
     ? 0
     : typeof spacing === 'string'
     ? theme.space[spacing]

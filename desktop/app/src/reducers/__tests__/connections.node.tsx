@@ -13,6 +13,17 @@ import BaseDevice from '../../devices/BaseDevice';
 import MacDevice from '../../devices/MacDevice';
 import {FlipperDevicePlugin} from '../../plugin';
 import MetroDevice from '../../devices/MetroDevice';
+import {TestUtils, _setFlipperLibImplementation} from 'flipper-plugin';
+import {wrapSandy} from '../../test-utils/createMockFlipperWithPlugin';
+import {createMockFlipperLib} from 'flipper-plugin/src/test-utils/test-utils';
+
+beforeEach(() => {
+  _setFlipperLibImplementation(createMockFlipperLib());
+});
+
+afterEach(() => {
+  _setFlipperLibImplementation(undefined);
+});
 
 test('doing a double REGISTER_DEVICE keeps the last', () => {
   const device1 = new BaseDevice('serial', 'physical', 'title', 'Android');
@@ -41,17 +52,8 @@ test('register, remove, re-register a metro device works correctly', () => {
   expect(state.devices.length).toBe(1);
   expect(state.devices[0].displayTitle()).toBe('React Native');
 
-  const archived = device1.archive();
-  state = reducer(state, {
-    type: 'UNREGISTER_DEVICES',
-    payload: new Set([device1.serial]),
-  });
-  expect(state.devices.length).toBe(0);
+  device1.disconnect();
 
-  state = reducer(state, {
-    type: 'REGISTER_DEVICE',
-    payload: archived,
-  });
   expect(state.devices.length).toBe(1);
   expect(state.devices[0].displayTitle()).toBe('React Native (Offline)');
 
@@ -61,27 +63,7 @@ test('register, remove, re-register a metro device works correctly', () => {
   });
   expect(state.devices.length).toBe(1);
   expect(state.devices[0].displayTitle()).toBe('React Native');
-});
-
-test('triggering REGISTER_DEVICE before REGISTER_PLUGINS still registers device plugins', () => {
-  class TestDevicePlugin extends FlipperDevicePlugin<any, any, any> {
-    static id = 'test';
-    static supportsDevice() {
-      return true;
-    }
-  }
-
-  const stateWithDevice = reducer(undefined, {
-    type: 'REGISTER_DEVICE',
-    payload: new MacDevice(),
-  });
-
-  const endState = reducer(stateWithDevice, {
-    type: 'REGISTER_PLUGINS',
-    payload: [TestDevicePlugin],
-  });
-
-  expect(endState.devices[0].devicePlugins).toEqual(['test']);
+  expect(state.devices[0]).not.toBe(device1);
 });
 
 test('selectPlugin sets deepLinkPayload correctly', () => {

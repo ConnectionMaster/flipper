@@ -16,7 +16,7 @@ import {
   setExportURL,
 } from '../reducers/application';
 import {Logger} from '../fb-interfaces/Logger';
-import {Idler} from '../utils/Idler';
+import {IdlerImpl} from '../utils/Idler';
 import {
   shareFlipperData,
   DataExportResult,
@@ -27,7 +27,6 @@ import {
   EXPORT_FLIPPER_TRACE_EVENT,
   displayFetchMetadataErrors,
 } from '../utils/exportData';
-import {clipboard} from 'electron';
 import ShareSheetErrorList from './ShareSheetErrorList';
 import {reportPlatformFailures} from '../utils/metrics';
 import CancellableExportStatus from './CancellableExportStatus';
@@ -36,6 +35,7 @@ import ShareSheetPendingDialog from './ShareSheetPendingDialog';
 import {getInstance as getLogger} from '../fb-stubs/Logger';
 import {resetSupportFormV2State} from '../reducers/supportForm';
 import {MiddlewareAPI} from '../reducers/index';
+import {getFlipperLib} from 'flipper-plugin';
 
 export const SHARE_FLIPPER_TRACE_EVENT = 'share-flipper-link';
 
@@ -95,7 +95,7 @@ export default class ShareSheetExportUrl extends Component<Props, State> {
     return this.context.store;
   }
 
-  idler = new Idler();
+  idler = new IdlerImpl();
 
   dispatchAndUpdateToolBarStatus(msg: string) {
     this.store.dispatch(
@@ -122,13 +122,11 @@ export default class ShareSheetExportUrl extends Component<Props, State> {
           this.setState({statusUpdate: msg});
         }
       };
-      const {
-        serializedString,
-        fetchMetaDataErrors,
-      } = await reportPlatformFailures(
-        exportStore(this.store, false, this.idler, statusUpdate),
-        `${EXPORT_FLIPPER_TRACE_EVENT}:UI_LINK`,
-      );
+      const {serializedString, fetchMetaDataErrors} =
+        await reportPlatformFailures(
+          exportStore(this.store, false, this.idler, statusUpdate),
+          `${EXPORT_FLIPPER_TRACE_EVENT}:UI_LINK`,
+        );
       const uploadMarker = `${EXPORT_FLIPPER_TRACE_EVENT}:upload`;
       performance.mark(uploadMarker);
       statusUpdate('Uploading Flipper Export...');
@@ -150,7 +148,7 @@ export default class ShareSheetExportUrl extends Component<Props, State> {
       if (flipperUrl) {
         this.store.dispatch(setExportURL(flipperUrl));
         if (this.state.runInBackground) {
-          clipboard.writeText(String(flipperUrl));
+          getFlipperLib().writeTextToClipboard(String(flipperUrl));
           new Notification('Shareable Flipper Export created', {
             body: 'URL copied to clipboard',
             requireInteraction: true,

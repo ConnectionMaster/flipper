@@ -13,11 +13,9 @@ import {reportPlatformFailures} from '../utils/metrics';
 import React, {useEffect, useState} from 'react';
 import fbConfig from '../fb-stubs/config';
 import {useStore} from '../utils/useStore';
-import {remote} from 'electron';
+import {getAppVersion} from '../utils/info';
 import {checkForUpdate} from '../fb-stubs/checkForUpdate';
 import ReleaseChannel from '../ReleaseChannel';
-
-const version = remote.app.getVersion();
 
 export type VersionCheckResult =
   | {
@@ -34,9 +32,8 @@ export type VersionCheckResult =
     };
 
 export default function UpdateIndicator() {
-  const [versionCheckResult, setVersionCheckResult] = useState<
-    VersionCheckResult
-  >({kind: 'up-to-date'});
+  const [versionCheckResult, setVersionCheckResult] =
+    useState<VersionCheckResult>({kind: 'up-to-date'});
   const launcherMsg = useStore((state) => state.application.launcherMsg);
 
   // Effect to show notification if details change
@@ -61,8 +58,9 @@ export default function UpdateIndicator() {
                 ) : (
                   <>
                     {' '}
-                    Pull <code>~/fbsource</code> and/or restart Flipper to
-                    update to the latest version.
+                    Run <code>arc pull</code> (optionally with{' '}
+                    <code>--latest</code>) in <code>~/fbsource</code> and
+                    restart Flipper to update to the latest version.
                   </>
                 )
               ) : (
@@ -90,6 +88,7 @@ export default function UpdateIndicator() {
 
   // trigger the update check, unless there is a launcher message already
   useEffect(() => {
+    const version = getAppVersion();
     if (launcherMsg && launcherMsg.message) {
       if (launcherMsg.severity === 'error') {
         notification.error({
@@ -108,7 +107,7 @@ export default function UpdateIndicator() {
           duration: null,
         });
       }
-    } else if (isProduction()) {
+    } else if (version && isProduction()) {
       reportPlatformFailures(
         checkForUpdate(version).then((res) => {
           if (res.kind === 'error') {

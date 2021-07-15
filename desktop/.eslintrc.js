@@ -12,6 +12,7 @@ const fbjs = require('eslint-config-fbjs');
 // enforces copy-right header and @format directive to be present in every file
 const pattern = /^\*\r?\n[\S\s]*Facebook[\S\s]* \* @format\r?\n/;
 
+// This list should match the replacements defined in `replace-flipper-requires.ts` and `dispatcher/plugins.tsx`
 const builtInModules = [
   'fb-qpl-xplat',
   'flipper',
@@ -21,8 +22,10 @@ const builtInModules = [
   'react-dom',
   'electron',
   'adbkit',
+  'antd',
   'immer',
   '@emotion/styled',
+  '@ant-design/icons',
 ];
 
 const prettierConfig = require('./.prettierrc.json');
@@ -40,14 +43,18 @@ module.exports = {
     'node',
     'react-hooks',
     'flipper',
+    'promise',
   ],
   rules: {
     // disable rules from eslint-config-fbjs
     'flowtype/define-flow-type': 0,
     'flowtype/use-flow-type': 0,
     'react/react-in-jsx-scope': 0, // not needed with our metro implementation
+    // Disallow boolean JSX properties set to true, e.g. `grow={true}`.
+    'react/jsx-boolean-value': ['warn', 'never'],
     'react-hooks/rules-of-hooks': 'error',
     'react-hooks/exhaustive-deps': 'warn',
+    'react/jsx-key': 'error',
     'no-new': 0, // new keyword needed e.g. new Notification
     'no-catch-shadow': 0, // only relevant for IE8 and below
     'no-bitwise': 0, // bitwise operations needed in some places
@@ -65,6 +72,26 @@ module.exports = {
     'no-unsafe-negation': 2,
     'no-useless-computed-key': 2,
     'no-useless-rename': 2,
+    'no-restricted-properties': [
+      1,
+      {
+        object: 'electron',
+        property: 'remote',
+      },
+    ],
+    'no-restricted-imports': [
+      1,
+      {
+        name: 'flipper',
+        message:
+          "Direct imports from 'flipper' are deprecated. Import from 'flipper-plugin' instead, which can be tested and distributed stand-alone. See https://fbflipper.com/docs/extending/sandy-migration for more details.",
+      },
+      {
+        name: 'electron',
+        message:
+          "Direct imports from 'electron' are deprecated. Most functions can be found in getFlipperLib() from flipper-plugin package instead.",
+      },
+    ],
 
     // additional rules for this project
     'header/header': [2, 'block', {pattern}],
@@ -73,6 +100,16 @@ module.exports = {
     'node/no-extraneous-import': [2, {allowModules: builtInModules}],
     'node/no-extraneous-require': [2, {allowModules: builtInModules}],
     'flipper/no-relative-imports-across-packages': [2],
+    'flipper/no-electron-remote-imports': [1],
+    'flipper/no-console-error-without-context': [1],
+
+    // promise rules, see https://github.com/xjamundx/eslint-plugin-promise for details on each of them
+    'promise/catch-or-return': 'warn',
+    'promise/no-nesting': 'warn',
+    'promise/no-promise-in-callback': 'warn',
+    'promise/no-callback-in-promise': 'warn',
+    'promise/no-return-in-finally': 'warn',
+    'promise/valid-params': 'error',
   },
   settings: {
     'import/resolver': {
@@ -97,6 +134,7 @@ module.exports = {
         // for reference: https://github.com/typescript-eslint/typescript-eslint/blob/master/packages/eslint-plugin/README.md#extension-rules
         'no-unused-vars': 0,
         'no-redeclare': 0,
+        'no-dupe-class-members': 0,
         '@typescript-eslint/no-redeclare': 1,
         '@typescript-eslint/no-unused-vars': [
           1,

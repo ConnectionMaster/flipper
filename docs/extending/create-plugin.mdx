@@ -9,7 +9,7 @@ import {FbInternalOnly, OssOnly} from 'internaldocs-fb-helpers';
 
 ## FlipperPlugin
 
-The plugin implementation that runs on the (mobile) application side of things is called the _client plugin_ in Flipper terminology. 
+The plugin implementation that runs on the (mobile) application side of things is called the _client plugin_ in Flipper terminology.
 To build a client plugin, implement the `FlipperPlugin` interface.
 
 The ID that is returned from your implementation needs to match the `name` defined in your JavaScript counterpart's `package.json`.
@@ -47,7 +47,7 @@ public class MyFlipperPlugin implements FlipperPlugin {
 </TabItem>
 <TabItem value="ios">
 
-```objective-c
+```objc
 @interface MyFlipperPlugin : NSObject<FlipperPlugin>
 @end
 
@@ -127,7 +127,7 @@ connection.receive("getData", new FlipperReceiver() {
 </TabItem>
 <TabItem value="ios">
 
-```objective-c
+```objc
 @interface MyFlipperPlugin : NSObject<FlipperPlugin>
 @end
 
@@ -204,7 +204,7 @@ connection.send("MyMessage",
 </TabItem>
 <TabItem value="ios">
 
-```objective-c
+```objc
 [connection send:@"getData" withParams:@{@"message":@"hello"}];
 ```
 
@@ -275,7 +275,7 @@ if (client != null) {
 </TabItem>
 <TabItem value="ios">
 
-```objective-c
+```objc
 FlipperClient *client = [FlipperClient sharedClient];
 MyFlipperPlugin *myPlugin = [client pluginWithIdentifier:@"MyFlipperPlugin"];
 [myPlugin sendData:myData];
@@ -296,6 +296,13 @@ if (myPlugin) {
 
 
 Here, `sendData` is an example of a method that might be implemented by the Flipper plugin.
+
+### Bi-directional communication demo
+
+An minimal communication demo can be found in our [Sample project]:
+
+* [Desktop implementation](https://github.com/facebook/flipper/blob/master/desktop/plugins/public/example/index.tsx)
+* [Android implementation](https://github.com/facebook/flipper/blob/master/android/sample/src/debug/java/com/facebook/flipper/plugins/example/ExampleFlipperPlugin.java) / [iOS implementation](https://github.com/facebook/flipper/tree/7bd4f80c2570bebb52af3cf49e45fc6130d6a473/iOS/Plugins/FlipperKitExamplePlugin/FlipperKitExamplePlugin)
 
 ## Background Plugins
 

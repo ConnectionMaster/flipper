@@ -10,38 +10,27 @@
 import {KeyboardActions} from './MenuBar';
 import {Logger} from './fb-interfaces/Logger';
 import Client from './Client';
-import {Store} from './reducers/index';
-import {ReactNode, Component} from 'react';
+import {Component} from 'react';
 import BaseDevice from './devices/BaseDevice';
-import {serialize, deserialize} from './utils/serialization';
-import {Idler} from './utils/Idler';
 import {StaticView} from './reducers/connections';
 import {State as ReduxState} from './reducers';
 import {DEFAULT_MAX_QUEUE_SIZE} from './reducers/pluginMessageQueue';
 import {ActivatablePluginDetails} from 'flipper-plugin-lib';
 import {Settings} from './reducers/settings';
-import {_SandyPluginDefinition} from 'flipper-plugin';
+import {
+  Notification,
+  Idler,
+  _SandyPluginDefinition,
+  _makeShallowSerializable,
+  _deserializeShallowObject,
+} from 'flipper-plugin';
 
 type Parameters = {[key: string]: any};
 
-export type PluginDefinition = ClientPluginDefinition | DevicePluginDefinition;
+export type PluginDefinition = _SandyPluginDefinition;
 
-export type DevicePluginDefinition =
-  | typeof FlipperDevicePlugin
-  | _SandyPluginDefinition;
-
-export type ClientPluginDefinition =
-  | typeof FlipperPlugin
-  | _SandyPluginDefinition;
-
-export type ClientPluginMap = Map<string, ClientPluginDefinition>;
-export type DevicePluginMap = Map<string, DevicePluginDefinition>;
-
-export function isSandyPlugin(
-  plugin?: PluginDefinition | null,
-): plugin is _SandyPluginDefinition {
-  return plugin instanceof _SandyPluginDefinition;
-}
+export type ClientPluginMap = Map<string, PluginDefinition>;
+export type DevicePluginMap = Map<string, PluginDefinition>;
 
 // This function is intended to be called from outside of the plugin.
 // If you want to `call` from the plugin use, this.client.call
@@ -62,6 +51,7 @@ export function supportsMethod(
 }
 
 export interface PluginClient {
+  isConnected: boolean;
   // eslint-disable-next-line
   send(method: string, params?: Parameters): void;
   // eslint-disable-next-line
@@ -74,23 +64,13 @@ export interface PluginClient {
 
 type PluginTarget = BaseDevice | Client;
 
-export type Notification = {
-  id: string;
-  title: string;
-  message: string | ReactNode;
-  severity: 'warning' | 'error';
-  timestamp?: number;
-  category?: string;
-  action?: string;
-};
-
 export type Props<T> = {
   logger: Logger;
   persistedState: T;
   setPersistedState: (state: Partial<T>) => void;
   target: PluginTarget;
   deepLinkPayload: unknown;
-  selectPlugin: (pluginID: string, deepLinkPayload: unknown) => boolean;
+  selectPlugin: (pluginID: string, deepLinkPayload: unknown) => void;
   isArchivedDevice: boolean;
   selectedApp: string | null;
   setStaticView: (payload: StaticView) => void;
@@ -112,7 +92,7 @@ type StaticPersistedState = any;
 export abstract class FlipperBasePlugin<
   State,
   Actions extends BaseAction,
-  PersistedState
+  PersistedState,
 > extends Component<Props<PersistedState>, State> {
   abstract ['constructor']: any;
   static title: string | null = null;
@@ -131,7 +111,9 @@ export abstract class FlipperBasePlugin<
   static maxQueueSize: number = DEFAULT_MAX_QUEUE_SIZE;
   static exportPersistedState:
     | ((
-        callClient: (method: string, params?: any) => Promise<any>,
+        callClient:
+          | undefined
+          | ((method: string, params?: any) => Promise<any>),
         persistedState: StaticPersistedState | undefined,
         store: ReduxState | undefined,
         idler?: Idler,
@@ -142,16 +124,6 @@ export abstract class FlipperBasePlugin<
   static getActiveNotifications:
     | ((persistedState: StaticPersistedState) => Array<Notification>)
     | undefined;
-  static onRegisterDevice:
-    | ((
-        store: Store,
-        baseDevice: BaseDevice,
-        setPersistedState: (
-          pluginKey: string,
-          newPluginState: StaticPersistedState | null,
-        ) => void,
-      ) => void)
-    | null;
 
   reducers: {
     [actionName: string]: (state: State, actionData: any) => Partial<State>;
@@ -170,34 +142,47 @@ export abstract class FlipperBasePlugin<
     statusUpdate?: (msg: string) => void,
     idler?: Idler,
     pluginName?: string,
-  ) => Promise<string> = (
+  ) => Promise<string> = async (
     persistedState: StaticPersistedState,
-    statusUpdate?: (msg: string) => void,
-    idler?: Idler,
-    pluginName?: string,
+    _statusUpdate?: (msg: string) => void,
+    _idler?: Idler,
+    _pluginName?: string,
   ) => {
-    return serialize(
-      persistedState,
-      idler,
-      statusUpdate,
-      pluginName != null ? `Serializing ${pluginName}` : undefined,
-    );
+    if (
+      persistedState &&
+      typeof persistedState === 'object' &&
+      !Array.isArray(persistedState)
+    ) {
+      return JSON.stringify(
+        Object.fromEntries(
+          Object.entries(persistedState).map(([key, value]) => [
+            key,
+            _makeShallowSerializable(value), // make first level of persisted state serializable
+          ]),
+        ),
+      );
+    } else {
+      return JSON.stringify(persistedState);
+    }
   };
 
   static deserializePersistedState: (
     serializedString: string,
   ) => StaticPersistedState = (serializedString: string) => {
-    return deserialize(serializedString);
+    const raw = JSON.parse(serializedString);
+    if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
+      return Object.fromEntries(
+        Object.entries(raw).map(([key, value]) => [
+          key,
+          _deserializeShallowObject(value),
+        ]),
+      );
+    } else {
+      return raw;
+    }
   };
 
   teardown(): void {}
-
-  computeNotifications(
-    _props: Props<PersistedState>,
-    _state: State,
-  ): Array<Notification> {
-    return [];
-  }
 
   // methods to be overridden by subclasses
   _init(): void {}
@@ -218,10 +203,14 @@ export abstract class FlipperBasePlugin<
   }
 }
 
+/**
+ * @deprecated Please use the newer "Sandy" plugin APIs!
+ * https://fbflipper.com/docs/extending/sandy-migration
+ */
 export class FlipperDevicePlugin<
   S,
   A extends BaseAction,
-  P
+  P,
 > extends FlipperBasePlugin<S, A, P> {
   ['constructor']: typeof FlipperPlugin;
   device: BaseDevice;
@@ -239,6 +228,7 @@ export class FlipperDevicePlugin<
     this.teardown();
   }
 
+  // TODO T84453692: remove this function after some transition period in favor of BaseDevice.supportsPlugin.
   static supportsDevice(_device: BaseDevice): boolean {
     throw new Error(
       'supportsDevice is unimplemented in FlipperDevicePlugin class',
@@ -246,10 +236,14 @@ export class FlipperDevicePlugin<
   }
 }
 
+/**
+ * @deprecated Please use the newer "Sandy" plugin APIs!
+ * https://fbflipper.com/docs/extending/sandy-migration
+ */
 export class FlipperPlugin<
   S,
   A extends BaseAction,
-  P
+  P,
 > extends FlipperBasePlugin<S, A, P> {
   ['constructor']: typeof FlipperPlugin;
   constructor(props: Props<P>) {
@@ -257,8 +251,11 @@ export class FlipperPlugin<
     // @ts-ignore constructor should be assigned already
     const {id} = this.constructor;
     this.subscriptions = [];
-    this.realClient = props.target as Client;
+    const realClient = (this.realClient = props.target as Client);
     this.client = {
+      get isConnected() {
+        return realClient.connected.get();
+      },
       call: (method, params) => this.realClient.call(id, method, true, params),
       send: (method, params) => this.realClient.send(id, method, params),
       subscribe: (method, callback) => {

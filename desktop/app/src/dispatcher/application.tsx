@@ -8,7 +8,12 @@
  */
 
 import {remote, ipcRenderer, IpcRendererEvent} from 'electron';
-import {toggleAction} from '../reducers/application';
+import {
+  ACTIVE_SHEET_SIGN_IN,
+  setActiveSheet,
+  setPastedToken,
+  toggleAction,
+} from '../reducers/application';
 import {Group, SUPPORTED_GROUPS} from '../reducers/supportForm';
 import {Store} from '../reducers/index';
 import {Logger} from '../fb-interfaces/Logger';
@@ -20,7 +25,6 @@ import {
 } from '../utils/exportData';
 import {tryCatchReportPlatformFailures} from '../utils/metrics';
 import {selectPlugin} from '../reducers/connections';
-import qs from 'query-string';
 
 export const uriComponents = (url: string): Array<string> => {
   if (!url) {
@@ -37,23 +41,33 @@ export const uriComponents = (url: string): Array<string> => {
 
 export default (store: Store, _logger: Logger) => {
   const currentWindow = remote.getCurrentWindow();
-  currentWindow.on('focus', () => {
-    store.dispatch({
-      type: 'windowIsFocused',
-      payload: {isFocused: true, time: Date.now()},
+  const onFocus = () => {
+    setImmediate(() => {
+      store.dispatch({
+        type: 'windowIsFocused',
+        payload: {isFocused: true, time: Date.now()},
+      });
     });
-  });
-  currentWindow.on('blur', () => {
-    store.dispatch({
-      type: 'windowIsFocused',
-      payload: {isFocused: false, time: Date.now()},
+  };
+  const onBlur = () => {
+    setImmediate(() => {
+      store.dispatch({
+        type: 'windowIsFocused',
+        payload: {isFocused: false, time: Date.now()},
+      });
     });
+  };
+  currentWindow.on('focus', onFocus);
+  currentWindow.on('blur', onBlur);
+  window.addEventListener('beforeunload', () => {
+    currentWindow.removeListener('focus', onFocus);
+    currentWindow.removeListener('blur', onBlur);
   });
 
   // windowIsFocussed is initialized in the store before the app is fully ready.
   // So wait until everything is up and running and then check and set the isFocussed state.
   window.addEventListener('flipper-store-ready', () => {
-    const isFocused = currentWindow.isFocused();
+    const isFocused = remote.getCurrentWindow().isFocused();
     store.dispatch({
       type: 'windowIsFocused',
       payload: {isFocused: isFocused, time: Date.now()},
@@ -64,9 +78,11 @@ export default (store: Store, _logger: Logger) => {
     'flipper-protocol-handler',
     (_event: IpcRendererEvent, query: string) => {
       const uri = new URL(query);
-      if (query.startsWith('flipper://import')) {
-        const {search} = new URL(query);
-        const {url} = qs.parse(search);
+      if (uri.protocol !== 'flipper:') {
+        return;
+      }
+      if (uri.pathname.match(/^\/*import\/*$/)) {
+        const url = uri.searchParams.get('url');
         store.dispatch(toggleAction('downloadingImportData', true));
         return (
           typeof url === 'string' &&
@@ -81,14 +97,18 @@ export default (store: Store, _logger: Logger) => {
               store.dispatch(toggleAction('downloadingImportData', false));
             })
         );
-      } else if (
-        uri.protocol === 'flipper:' &&
-        uri.pathname.includes('support-form')
-      ) {
+      } else if (uri.pathname.match(/^\/*support-form\/*$/)) {
         const formParam = uri.searchParams.get('form');
         const grp = deeplinkFormParamToGroups(formParam);
         if (grp) {
           grp.handleSupportFormDeeplinks(store);
+        }
+        return;
+      } else if (uri.pathname.match(/^\/*login\/*$/)) {
+        const token = uri.searchParams.get('token');
+        store.dispatch(setPastedToken(token ?? undefined));
+        if (store.getState().application.activeSheet !== ACTIVE_SHEET_SIGN_IN) {
+          store.dispatch(setActiveSheet(ACTIVE_SHEET_SIGN_IN));
         }
         return;
       }

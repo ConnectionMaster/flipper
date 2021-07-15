@@ -3,6 +3,7 @@
   "name": "{{package_name}}",
   "id": "{{id}}",
   "version": "1.0.0",
+  "pluginType": "client",
   "main": "dist/bundle.js",
   "flipperBundlerEntry": "src/index.tsx",
   "license": "MIT",
@@ -16,23 +17,23 @@
     "prepack": "flipper-pkg lint && flipper-pkg bundle",
     "build": "flipper-pkg bundle",
     "watch": "flipper-pkg bundle --watch",
-    "test": "jest"
+    "test": "jest --no-watchman"
   },
   "peerDependencies": {
-    "flipper": "latest",
-    "flipper-plugin": "latest",
+    "flipper-plugin": "^{{flipper_version}}",
     "antd": "latest"
   },
   "devDependencies": {
     "@babel/preset-react": "latest",
     "@babel/preset-typescript": "latest",
+    "@testing-library/react": "latest",
     "@types/jest": "latest",
     "@types/react": "latest",
     "@types/react-dom": "latest",
     "antd": "latest",
-    "flipper": "latest",
     "flipper-plugin": "latest",
     "flipper-pkg": "latest",
-    "jest": "latest"
+    "jest": "latest",
+    "typescript": "latest"
   }
 }

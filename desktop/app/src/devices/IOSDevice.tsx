@@ -19,6 +19,8 @@ import path from 'path';
 import {promisify} from 'util';
 import {exec} from 'child_process';
 import {default as promiseTimeout} from '../utils/promiseTimeout';
+import {IOSBridge} from '../utils/IOSBridge';
+import split2 from 'split2';
 
 type IOSLogLevel = 'Default' | 'Info' | 'Debug' | 'Error' | 'Fault';
 
@@ -39,20 +41,33 @@ type RawLogEntry = {
   traceID: string;
 };
 
+// https://regex101.com/r/rrl03T/1
+// Mar 25 17:06:38 iPhone symptomsd(SymptomEvaluator)[125] <Notice>: Stuff
+const logRegex = /(^.{15}) ([^ ]+?) ([^\[]+?)\[(\d+?)\] <(\w+?)>: (.*)$/s;
+
 export default class IOSDevice extends BaseDevice {
-  log: any;
+  log?: child_process.ChildProcessWithoutNullStreams;
   buffer: string;
   private recordingProcess?: ChildProcess;
   private recordingLocation?: string;
+  private iOSBridge: IOSBridge;
 
-  constructor(serial: string, deviceType: DeviceType, title: string) {
+  constructor(
+    iOSBridge: IOSBridge,
+    serial: string,
+    deviceType: DeviceType,
+    title: string,
+  ) {
     super(serial, deviceType, title, 'iOS');
-    this.icon = 'icons/ios.svg';
+    this.icon = 'mobile';
     this.buffer = '';
-    this.log = this.startLogListener();
+    this.iOSBridge = iOSBridge;
   }
 
-  screenshot(): Promise<Buffer> {
+  async screenshot(): Promise<Buffer> {
+    if (!this.connected.get()) {
+      return Buffer.from([]);
+    }
     const tmpImageName = uuid() + '.png';
     const tmpDirectory = (electron.app || electron.remote.app).getPath('temp');
     const tmpFilePath = path.join(tmpDirectory, tmpImageName);
@@ -72,83 +87,105 @@ export default class IOSDevice extends BaseDevice {
     exec(command);
   }
 
-  teardown() {
-    if (this.log) {
-      this.log.kill();
-    }
+  startLogging() {
+    this.startLogListener(this.iOSBridge);
   }
 
-  startLogListener(retries: number = 3) {
-    if (this.deviceType === 'physical') {
-      return;
-    }
+  stopLogging() {
+    this.log?.kill();
+  }
+
+  startLogListener(iOSBridge: IOSBridge, retries: number = 3) {
     if (retries === 0) {
-      console.error('Attaching iOS log listener continuously failed.');
+      console.warn('Attaching iOS log listener continuously failed.');
       return;
     }
-    if (!this.log) {
-      const deviceSetPath = process.env.DEVICE_SET_PATH
-        ? ['--set', process.env.DEVICE_SET_PATH]
-        : [];
 
-      this.log = child_process.spawn(
-        'xcrun',
-        [
-          'simctl',
-          ...deviceSetPath,
-          'spawn',
-          this.serial,
-          'log',
-          'stream',
-          '--style',
-          'json',
-          '--predicate',
-          'senderImagePath contains "Containers"',
-          '--info',
-          '--debug',
-        ],
-        {},
-      );
-
+    const logListener = iOSBridge.startLogListener;
+    if (
+      !this.log &&
+      logListener &&
+      (this.deviceType === 'emulator' ||
+        (this.deviceType === 'physical' && iOSBridge.idbAvailable))
+    ) {
+      this.log = logListener(this.serial, this.deviceType);
       this.log.on('error', (err: Error) => {
-        console.error(err);
+        console.error('iOS log tailer error', err);
       });
 
       this.log.stderr.on('data', (data: Buffer) => {
-        console.error(data.toString());
+        console.warn('iOS log tailer stderr: ', data.toString());
       });
 
       this.log.on('exit', () => {
-        this.log = null;
+        this.log = undefined;
       });
-    }
 
-    try {
-      this.log.stdout
-        .pipe(new StripLogPrefix())
-        .pipe(JSONStream.parse('*'))
-        .on('data', (data: RawLogEntry) => {
-          const entry = IOSDevice.parseLogEntry(data);
-          this.addLogEntry(entry);
-        });
-    } catch (e) {
-      console.error('Could not parse iOS log stream.', e);
-      // restart log stream
-      this.log.kill();
-      this.log = null;
-      this.startLogListener(retries - 1);
+      try {
+        if (this.deviceType === 'physical') {
+          this.log.stdout.pipe(split2('\0')).on('data', (line: string) => {
+            const parsed = IOSDevice.parseLogLine(line);
+            if (parsed) {
+              this.addLogEntry(parsed);
+            } else {
+              console.warn('Failed to parse iOS log line: ', line);
+            }
+          });
+        } else {
+          this.log.stdout
+            .pipe(new StripLogPrefix())
+            .pipe(JSONStream.parse('*'))
+            .on('data', (data: RawLogEntry) => {
+              const entry = IOSDevice.parseJsonLogEntry(data);
+              this.addLogEntry(entry);
+            });
+        }
+      } catch (e) {
+        console.error('Could not parse iOS log stream.', e);
+        // restart log stream
+        this.log.kill();
+        this.log = undefined;
+        this.startLogListener(iOSBridge, retries - 1);
+      }
     }
   }
 
-  static parseLogEntry(entry: RawLogEntry): DeviceLogEntry {
-    const LOG_MAPPING: Map<IOSLogLevel, LogLevel> = new Map([
-      ['Default' as IOSLogLevel, 'debug' as LogLevel],
-      ['Info' as IOSLogLevel, 'info' as LogLevel],
-      ['Debug' as IOSLogLevel, 'debug' as LogLevel],
-      ['Error' as IOSLogLevel, 'error' as LogLevel],
-      ['Fault' as IOSLogLevel, 'fatal' as LogLevel],
-    ]);
-    let type: LogLevel = LOG_MAPPING.get(entry.messageType) || 'unknown';
+  static getLogLevel(level: string): LogLevel {
+    switch (level) {
+      case 'Default':
+        return 'debug';
+      case 'Info':
+        return 'info';
+      case 'Debug':
+        return 'debug';
+      case 'Error':
+        return 'error';
+      case 'Notice':
+        return 'verbose';
+      case 'Fault':
+        return 'fatal';
+      default:
+        return 'unknown';
+    }
+  }
+
+  static parseLogLine(line: string): DeviceLogEntry | undefined {
+    const matches = line.match(logRegex);
+    if (matches) {
+      return {
+        date: new Date(Date.parse(matches[1])),
+        tag: matches[3],
+        tid: 0,
+        pid: parseInt(matches[4], 10),
+        type: IOSDevice.getLogLevel(matches[5]),
+        message: matches[6],
+      };
+    }
+    return undefined;
+  }
+
+  static parseJsonLogEntry(entry: RawLogEntry): DeviceLogEntry {
+    let type: LogLevel = IOSDevice.getLogLevel(entry.messageType);
 
     // when Apple log levels are not used, log messages can be prefixed with
     // their loglevel.
@@ -180,7 +217,7 @@ export default class IOSDevice extends BaseDevice {
   }
 
   async screenCaptureAvailable() {
-    return this.deviceType === 'emulator';
+    return this.deviceType === 'emulator' && this.connected.get();
   }
 
   async startScreenCapture(destination: string) {
@@ -220,6 +257,11 @@ export default class IOSDevice extends BaseDevice {
       return output;
     }
     return null;
+  }
+
+  disconnect() {
+    this.stopScreenCapture();
+    super.disconnect();
   }
 }
 

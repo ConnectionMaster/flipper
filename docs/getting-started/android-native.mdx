@@ -12,7 +12,7 @@ you can hook up the diagnostics Activity to help you troubleshoot connection iss
 
 ## Dependencies
 
-Flipper is distributed via JCenter. Add the dependencies to your `build.gradle` file.
+Flipper is distributed via Maven Central. Add the dependencies to your `build.gradle` file.
 You should also explicitly depend on [`soloader`](https://github.com/facebook/soloader)
 instead of relying on transitive dependency resolution which is getting deprecated
 with Gradle 5.
@@ -22,14 +22,14 @@ use to make it easier to strip Flipper from your release builds.
 
 ```groovy
 repositories {
-  jcenter()
+  mavenCentral()
 }
 
 dependencies {
-  debugImplementation 'com.facebook.flipper:flipper:0.72.0'
-  debugImplementation 'com.facebook.soloader:soloader:0.9.0'
+  debugImplementation 'com.facebook.flipper:flipper:0.98.0'
+  debugImplementation 'com.facebook.soloader:soloader:0.10.1'
 
-  releaseImplementation 'com.facebook.flipper:flipper-noop:0.72.0'
+  releaseImplementation 'com.facebook.flipper:flipper-noop:0.98.0'
 }
 ```
 
@@ -101,16 +101,16 @@ repositories {
 }
 
 dependencies {
-  debugImplementation 'com.facebook.flipper:flipper:0.72.1-SNAPSHOT'
-  debugImplementation 'com.facebook.soloader:soloader:0.9.0'
+  debugImplementation 'com.facebook.flipper:flipper:0.98.1-SNAPSHOT'
+  debugImplementation 'com.facebook.soloader:soloader:0.10.1'
 
-  releaseImplementation 'com.facebook.flipper:flipper-noop:0.72.1-SNAPSHOT'
+  releaseImplementation 'com.facebook.flipper:flipper-noop:0.98.1-SNAPSHOT'
 }
 ```
 
 ## Enabling plugins
 
-Finally, you need to add plugins to your Flipper client. Above, we have only added the Layout Inspector plugin to get you started. See <Link to={useBaseUrl("/docs/setup/network-plugin")}>Network Plugin</Link> and <Link to={useBaseUrl("/docs/setup/layout-plugin")}>Layout Inspector Plugin</Link> for information on how to add them, and also enable Litho or ComponentKit support. You can check the sample apps in the [GitHub repo](https://github.com/facebook/flipper) for examples of integrating other plugins.
+Finally, you need to add plugins to your Flipper client. Above, we have only added the Layout Inspector plugin to get you started. See <Link to={useBaseUrl("/docs/setup/plugins/network")}>Network Plugin</Link> and <Link to={useBaseUrl("/docs/setup/layout-plugin")}>Layout Inspector Plugin</Link> for information on how to add them, and also enable Litho or ComponentKit support. You can check the sample apps in the [GitHub repo](https://github.com/facebook/flipper) for examples of integrating other plugins.
 
 ## Having trouble?
 

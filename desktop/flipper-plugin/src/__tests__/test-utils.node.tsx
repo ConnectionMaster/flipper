@@ -12,6 +12,9 @@ import * as testPlugin from './TestPlugin';
 import {createState} from '../state/atom';
 import {PluginClient} from '../plugin/Plugin';
 import {DevicePluginClient} from '../plugin/DevicePlugin';
+import mockConsole from 'jest-mock-console';
+import {sleep} from '../utils/sleep';
+import {createDataSource} from '../state/createDataSource';
 
 test('it can start a plugin and lifecycle events', () => {
   const {instance, ...p} = TestUtils.startPlugin(testPlugin);
@@ -55,6 +58,7 @@ test('it can start a plugin and lifecycle events', () => {
   expect(instance.activateStub).toBeCalledTimes(2);
   expect(instance.deactivateStub).toBeCalledTimes(2);
   expect(instance.destroyStub).toBeCalledTimes(1);
+  expect(instance.readyStub).toBeCalledTimes(1);
 
   expect(instance.appName).toBe('TestApplication');
   expect(instance.appId).toBe('TestApplication#Android#TestDevice#serial-000');
@@ -217,16 +221,19 @@ test('plugins support non-serializable state', async () => {
 });
 
 test('plugins support restoring state', async () => {
-  const {exportState} = TestUtils.startPlugin(
+  const readyFn = jest.fn();
+  const {exportState, instance} = TestUtils.startPlugin(
     {
-      plugin() {
+      plugin(c: PluginClient<{}, {}>) {
         const field1 = createState(1, {persist: 'field1'});
         const field2 = createState(2);
         const field3 = createState(3, {persist: 'field3'});
-        expect(field1.get()).toBe('a');
-        expect(field2.get()).toBe(2);
-        expect(field3.get()).toBe('b');
-        return {};
+        c.onReady(readyFn);
+        return {
+          field1,
+          field2,
+          field3,
+        };
       },
       Component() {
         return null;
@@ -236,7 +243,14 @@ test('plugins support restoring state', async () => {
       initialState: {field1: 'a', field3: 'b'},
     },
   );
+
+  const {field1, field2, field3} = instance;
+  expect(field1.get()).toBe('a');
+  expect(field2.get()).toBe(2);
+  expect(field3.get()).toBe('b');
+
   expect(exportState()).toEqual({field1: 'a', field3: 'b'});
+  expect(readyFn).toBeCalledTimes(1);
 });
 
 test('plugins cannot use a persist key twice', async () => {
@@ -256,6 +270,147 @@ test('plugins cannot use a persist key twice', async () => {
   );
 });
 
+test('plugins can have custom import handler', () => {
+  const readyFn = jest.fn();
+
+  const {instance} = TestUtils.startPlugin(
+    {
+      plugin(client: PluginClient) {
+        const field1 = createState(0);
+        const field2 = createState(0);
+
+        client.onImport((data) => {
+          field1.set(data.a);
+          field2.set(data.b);
+        });
+        client.onReady(readyFn);
+
+        return {field1, field2};
+      },
+      Component() {
+        return null;
+      },
+    },
+    {
+      initialState: {
+        a: 1,
+        b: 2,
+      },
+    },
+  );
+  expect(instance.field1.get()).toBe(1);
+  expect(instance.field2.get()).toBe(2);
+  expect(readyFn).toBeCalledTimes(1);
+});
+
+test('plugins cannot combine import handler with persist option', async () => {
+  expect(() => {
+    TestUtils.startPlugin({
+      plugin(client: PluginClient) {
+        const field1 = createState(1, {persist: 'f1'});
+        const field2 = createState(1, {persist: 'f2'});
+        client.onImport(() => {});
+        return {field1, field2};
+      },
+      Component() {
+        return null;
+      },
+    });
+  }).toThrowErrorMatchingInlineSnapshot(
+    `"A custom onImport handler was defined for plugin 'TestPlugin', the 'persist' option of states f1, f2 should not be set."`,
+  );
+});
+
+test('plugins can handle import errors', async () => {
+  const restoreConsole = mockConsole();
+  let instance: any;
+  try {
+    instance = TestUtils.startPlugin(
+      {
+        plugin(client: PluginClient) {
+          const field1 = createState(0);
+          const field2 = createState(0);
+
+          client.onImport(() => {
+            throw new Error('Oops');
+          });
+
+          return {field1, field2};
+        },
+        Component() {
+          return null;
+        },
+      },
+      {
+        initialState: {
+          a: 1,
+          b: 2,
+        },
+      },
+    ).instance;
+    // @ts-ignore
+    expect(console.error.mock.calls).toMatchInlineSnapshot(`
+      Array [
+        Array [
+          "An error occurred when importing data for plugin 'TestPlugin': 'Error: Oops",
+          [Error: Oops],
+        ],
+      ]
+    `);
+  } finally {
+    restoreConsole();
+  }
+  expect(instance.field1.get()).toBe(0);
+  expect(instance.field2.get()).toBe(0);
+});
+
+test('plugins can have custom export handler', async () => {
+  const {exportStateAsync} = TestUtils.startPlugin({
+    plugin(client: PluginClient) {
+      const field1 = createState(0, {persist: 'field1'});
+
+      client.onExport(async () => {
+        await sleep(10);
+        return {
+          b: 3,
+        };
+      });
+
+      return {field1};
+    },
+    Component() {
+      return null;
+    },
+  });
+  expect(await exportStateAsync()).toEqual({b: 3});
+});
+
+test('plugins can have custom export handler that doesnt return', async () => {
+  const {exportStateAsync} = TestUtils.startPlugin(
+    {
+      plugin(client: PluginClient) {
+        const field1 = createState(0, {persist: 'field1'});
+
+        client.onExport(async () => {
+          await sleep(10);
+          field1.set(field1.get() + 1);
+        });
+
+        return {field1};
+      },
+      Component() {
+        return null;
+      },
+    },
+    {
+      initialState: {
+        field1: 1,
+      },
+    },
+  );
+  expect(await exportStateAsync()).toEqual({field1: 2});
+});
+
 test('plugins can receive deeplinks', async () => {
   const plugin = TestUtils.startPlugin({
     plugin(client: PluginClient) {
@@ -273,7 +428,7 @@ test('plugins can receive deeplinks', async () => {
   });
 
   expect(plugin.instance.field1.get()).toBe('');
-  plugin.triggerDeepLink('test');
+  await plugin.triggerDeepLink('test');
   expect(plugin.instance.field1.get()).toBe('test');
 });
 
@@ -295,7 +450,7 @@ test('device plugins can receive deeplinks', async () => {
   });
 
   expect(plugin.instance.field1.get()).toBe('');
-  plugin.triggerDeepLink('test');
+  await plugin.triggerDeepLink('test');
   expect(plugin.instance.field1.get()).toBe('test');
 });
 
@@ -326,7 +481,7 @@ test('plugins can register menu entries', async () => {
   });
 
   expect(plugin.instance.counter.get()).toBe(0);
-  plugin.triggerDeepLink('test');
+  await plugin.triggerDeepLink('test');
   plugin.triggerMenuEntry('createPaste');
   plugin.triggerMenuEntry('Custom Action');
   expect(plugin.instance.counter.get()).toBe(4);
@@ -428,4 +583,30 @@ test('GKs are supported', () => {
     const plugin = TestUtils.startPlugin(pluginModule, {GKs: ['x']});
     expect(plugin.instance.isTest()).toBe(false);
   }
+});
+
+test('plugins can serialize dataSources', () => {
+  const {instance, exportState} = TestUtils.startPlugin(
+    {
+      plugin(_client: PluginClient) {
+        const ds = createDataSource([1, 2, 3], {persist: 'ds'});
+        return {ds};
+      },
+      Component() {
+        return null;
+      },
+    },
+    {
+      initialState: {
+        ds: [4, 5],
+      },
+    },
+  );
+
+  expect(instance.ds.records()).toEqual([4, 5]);
+  instance.ds.shift(1);
+  instance.ds.append(6);
+  expect(exportState()).toEqual({
+    ds: [5, 6],
+  });
 });

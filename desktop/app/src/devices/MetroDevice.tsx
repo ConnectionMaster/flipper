@@ -9,8 +9,8 @@
 
 import {LogLevel} from 'flipper-plugin';
 import BaseDevice from './BaseDevice';
-import ArchivedDevice from './ArchivedDevice';
 import {EventEmitter} from 'events';
+import util from 'util';
 
 // From xplat/js/metro/packages/metro/src/lib/reporting.js
 export type BundleDetails = {
@@ -145,7 +145,6 @@ export default class MetroDevice extends BaseDevice {
 
   constructor(serial: string, ws: WebSocket | undefined) {
     super(serial, 'emulator', 'React Native', 'Metro');
-    this.devicePlugins = [];
     if (ws) {
       this.ws = ws;
       ws.onmessage = this._handleWSMessage;
@@ -162,11 +161,11 @@ export default class MetroDevice extends BaseDevice {
         tid: 0,
         type,
         tag: message.type,
-        message: message.data
-          .map((v) =>
+        message: util.format(
+          ...message.data.map((v) =>
             v && typeof v === 'object' ? JSON.stringify(v, null, 2) : v,
-          )
-          .join(' '),
+          ),
+        ),
       });
     } else {
       const level = getLoglevelFromMessageType(message.type);
@@ -197,16 +196,5 @@ export default class MetroDevice extends BaseDevice {
     } else {
       console.warn('Cannot send command, no connection', command);
     }
-  }
-
-  archive() {
-    return new ArchivedDevice({
-      serial: this.serial,
-      deviceType: this.deviceType,
-      title: this.title,
-      os: this.os,
-      logEntries: [...this.logEntries],
-      screenshotHandle: null,
-    });
   }
 }

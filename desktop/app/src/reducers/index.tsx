@@ -15,11 +15,9 @@ import application, {
 import connections, {
   State as DevicesState,
   Action as DevicesAction,
+  persistMigrations as devicesPersistMigrations,
+  persistVersion as devicesPersistVersion,
 } from './connections';
-import pluginStates, {
-  State as PluginStatesState,
-  Action as PluginStatesAction,
-} from './pluginStates';
 import pluginMessageQueue, {
   State as PluginMessageQueueState,
   Action as PluginMessageQueueAction,
@@ -31,6 +29,8 @@ import notifications, {
 import plugins, {
   State as PluginsState,
   Action as PluginsAction,
+  persistMigrations as pluginsPersistMigrations,
+  persistVersion as pluginsPersistVersion,
 } from './plugins';
 import supportForm, {
   State as SupportFormState,
@@ -67,7 +67,7 @@ import {launcherConfigDir} from '../utils/launcher';
 import os from 'os';
 import {resolve} from 'path';
 import xdg from 'xdg-basedir';
-import {createTransform, persistReducer} from 'redux-persist';
+import {createMigrate, createTransform, persistReducer} from 'redux-persist';
 import {PersistPartial} from 'redux-persist/es/persistReducer';
 
 import {Store as ReduxStore, MiddlewareAPI as ReduxMiddlewareAPI} from 'redux';
@@ -77,7 +77,6 @@ import {TransformConfig} from 'redux-persist/es/createTransform';
 export type Actions =
   | ApplicationAction
   | DevicesAction
-  | PluginStatesAction
   | PluginMessageQueueAction
   | NotificationsAction
   | PluginsAction
@@ -94,7 +93,6 @@ export type Actions =
 export type State = {
   application: ApplicationState;
   connections: DevicesState & PersistPartial;
-  pluginStates: PluginStatesState;
   pluginMessageQueue: PluginMessageQueueState;
   notifications: NotificationsState & PersistPartial;
   plugins: PluginsState & PersistPartial;
@@ -102,7 +100,7 @@ export type State = {
   settingsState: SettingsState & PersistPartial;
   launcherSettingsState: LauncherSettingsState & PersistPartial;
   supportForm: SupportFormState;
-  pluginManager: PluginManagerState & PersistPartial;
+  pluginManager: PluginManagerState;
   healthchecks: HealthcheckState & PersistPartial;
   usageTracking: TrackingState;
   pluginDownloads: PluginDownloadsState;
@@ -130,78 +128,82 @@ const launcherSettingsStorage = new LauncherSettingsStorage(
   resolve(launcherConfigDir(), 'flipper-launcher.toml'),
 );
 
-export default combineReducers<State, Actions>({
-  application,
-  connections: persistReducer<DevicesState, Actions>(
-    {
-      key: 'connections',
-      storage,
-      whitelist: [
-        'userPreferredDevice',
-        'userPreferredPlugin',
-        'userPreferredApp',
-        'userStarredPlugins',
-      ],
-    },
-    connections,
-  ),
-  pluginStates,
-  pluginMessageQueue: pluginMessageQueue as any,
-  notifications: persistReducer(
-    {
-      key: 'notifications',
-      storage,
-      whitelist: ['blacklistedPlugins', 'blacklistedCategories'],
-    },
-    notifications,
-  ),
-  plugins: persistReducer<PluginsState, Actions>(
-    {
-      key: 'plugins',
-      storage,
-      whitelist: ['marketplacePlugins'],
-    },
-    plugins,
-  ),
-  supportForm,
-  pluginManager: persistReducer<PluginManagerState, Actions>(
-    {
-      key: 'pluginManager',
-      storage,
-      whitelist: ['uninstalledPlugins'],
-      transforms: [setTransformer({whitelist: ['uninstalledPlugins']})],
-    },
+export function createRootReducer() {
+  return combineReducers<State, Actions>({
+    application,
+    connections: persistReducer<DevicesState, Actions>(
+      {
+        key: 'connections',
+        storage,
+        whitelist: [
+          'userPreferredDevice',
+          'userPreferredPlugin',
+          'userPreferredApp',
+          'enabledPlugins',
+          'enabledDevicePlugins',
+        ],
+        transforms: [
+          setTransformer({
+            whitelist: ['enabledDevicePlugins', 'userStarredDevicePlugins'],
+          }),
+        ],
+        version: devicesPersistVersion,
+        migrate: createMigrate(devicesPersistMigrations),
+      },
+      connections,
+    ),
+    pluginMessageQueue: pluginMessageQueue as any,
+    notifications: persistReducer(
+      {
+        key: 'notifications',
+        storage,
+        whitelist: ['blacklistedPlugins', 'blacklistedCategories'],
+      },
+      notifications,
+    ),
+    plugins: persistReducer<PluginsState, Actions>(
+      {
+        key: 'plugins',
+        storage,
+        whitelist: ['marketplacePlugins', 'uninstalledPluginNames'],
+        transforms: [setTransformer({whitelist: ['uninstalledPluginNames']})],
+        version: pluginsPersistVersion,
+        migrate: createMigrate(pluginsPersistMigrations),
+      },
+      plugins,
+    ),
+    supportForm,
     pluginManager,
-  ),
-  user: persistReducer(
-    {
-      key: 'user',
-      storage,
-    },
-    user,
-  ),
-  settingsState: persistReducer(
-    {key: 'settings', storage: settingsStorage},
-    settings,
-  ),
-  launcherSettingsState: persistReducer(
-    {
-      key: 'launcherSettings',
-      storage: launcherSettingsStorage,
-      serialize: false,
-      // @ts-ignore: property is erroneously missing in redux-persist type definitions
-      deserialize: false,
-    },
-    launcherSettings,
-  ),
-  healthchecks: persistReducer<HealthcheckState, Actions>(
-    {
-      key: 'healthchecks',
-      storage,
-      whitelist: ['acknowledgedProblems'],
-    },
-    healthchecks,
-  ),
-  usageTracking,
-  pluginDownloads,
-});
+    user: persistReducer(
+      {
+        key: 'user',
+        storage,
+      },
+      user,
+    ),
+    settingsState: persistReducer(
+      {key: 'settings', storage: settingsStorage},
+      settings,
+    ),
+    launcherSettingsState: persistReducer(
+      {
+        key: 'launcherSettings',
+        storage: launcherSettingsStorage,
+        serialize: false,
+        // @ts-ignore: property is erroneously missing in redux-persist type definitions
+        deserialize: false,
+      },
+      launcherSettings,
+    ),
+    healthchecks: persistReducer<HealthcheckState, Actions>(
+      {
+        key: 'healthchecks',
+        storage,
+        whitelist: ['acknowledgedProblems'],
+      },
+      healthchecks,
+    ),
+    usageTracking,
+    pluginDownloads,
+  });
+}

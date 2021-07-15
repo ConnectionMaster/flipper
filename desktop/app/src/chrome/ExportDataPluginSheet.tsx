@@ -13,7 +13,6 @@ import {ShareType} from '../reducers/application';
 import {State as Store} from '../reducers';
 import {ActiveSheet} from '../reducers/application';
 import {selectedPlugins as actionForSelectedPlugins} from '../reducers/plugins';
-import {getActivePersistentPlugins} from '../utils/pluginUtils';
 import {
   ACTIVE_SHEET_SHARE_DATA,
   setActiveSheet as getActiveSheetAction,
@@ -23,6 +22,7 @@ import ListView from './ListView';
 import {Dispatch, Action} from 'redux';
 import {unsetShare} from '../reducers/application';
 import {FlexColumn, styled} from '../ui';
+import {getExportablePlugins} from '../selectors/connections';
 
 type OwnProps = {
   onHide: () => void;
@@ -103,25 +103,11 @@ class ExportDataPluginSheet extends Component<Props, {}> {
 }
 
 export default connect<StateFromProps, DispatchFromProps, OwnProps, Store>(
-  ({
-    application: {share},
-    plugins,
-    pluginStates,
-    pluginMessageQueue,
-    connections: {selectedApp, clients},
-  }) => {
-    const selectedClient = clients.find((o) => {
-      return o.id === selectedApp;
-    });
-    const availablePluginsToExport = getActivePersistentPlugins(
-      pluginStates,
-      pluginMessageQueue,
-      plugins,
-      selectedClient,
-    );
+  (state) => {
+    const availablePluginsToExport = getExportablePlugins(state);
     return {
-      share,
-      selectedPlugins: plugins.selectedPlugins,
+      share: state.application.share,
+      selectedPlugins: state.plugins.selectedPlugins,
       availablePluginsToExport,
     };
   },

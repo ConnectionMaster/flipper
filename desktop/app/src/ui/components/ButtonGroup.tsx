@@ -9,7 +9,6 @@
 
 import styled from '@emotion/styled';
 import React, {createContext} from 'react';
-import {useIsSandy} from '../../sandy-chrome/SandyContext';
 import {Space} from 'antd';
 
 const ButtonGroupContainer = styled.div({
@@ -33,16 +32,12 @@ export const ButtonGroupContext = createContext(false);
  *     <Button>Three</Button>
  *   </ButtonGroup>
  * ```
+ * @deprecated use Layout.Horizontal with flags: gap pad wrap
  */
 export default function ButtonGroup({children}: {children: React.ReactNode}) {
-  const isSandy = useIsSandy(); // according to Ant design guides buttons should only be grouped if they are radios
-  return isSandy ? (
-    <ButtonGroupContext.Provider value={true}>
+  return (
+    <ButtonGroupContext.Provider value>
       <Space>{children}</Space>
-    </ButtonGroupContext.Provider>
-  ) : (
-    <ButtonGroupContext.Provider value={true}>
-      <ButtonGroupContainer>{children}</ButtonGroupContainer>
     </ButtonGroupContext.Provider>
   );
 }

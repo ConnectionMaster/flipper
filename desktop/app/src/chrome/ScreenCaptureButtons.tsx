@@ -8,27 +8,44 @@
  */
 
 import {Button as AntButton, message} from 'antd';
-import {Button, ButtonGroup} from '../ui';
 import React, {useState, useEffect, useCallback} from 'react';
 import path from 'path';
+import fs from 'fs-extra';
 import open from 'open';
 import {capture, CAPTURE_LOCATION, getFileName} from '../utils/screenshot';
 import {CameraOutlined, VideoCameraOutlined} from '@ant-design/icons';
 import {useStore} from '../utils/useStore';
 
-export async function openFile(path: string | null) {
+async function openFile(path: string | null) {
   if (!path) {
+    return;
+  }
+
+  let fileStat;
+  try {
+    fileStat = await fs.stat(path);
+  } catch (err) {
+    message.error(`Couldn't open captured file: ${path}: ${err}`);
+    return;
+  }
+
+  // Rather randomly chosen. Some FSs still reserve 8 bytes for empty files.
+  // If this doesn't reliably catch "corrupt" files, you might want to increase this.
+  if (fileStat.size <= 8) {
+    message.error(
+      'Screencap file retrieved from device appears to be corrupt. Your device may not support screen recording. Sometimes restarting your device can help.',
+    );
     return;
   }
 
   try {
     await open(path);
   } catch (e) {
-    console.error(`Opening ${path} failed with error ${e}.`);
+    console.warn(`Opening ${path} failed with error ${e}.`);
   }
 }
 
-export default function ScreenCaptureButtons({useSandy}: {useSandy?: boolean}) {
+export default function ScreenCaptureButtons() {
   const selectedDevice = useStore((state) => state.connections.selectedDevice);
   const [isTakingScreenshot, setIsTakingScreenshot] = useState(false);
   const [isRecordingAvailable, setIsRecordingAvailable] = useState(false);
@@ -84,7 +101,7 @@ export default function ScreenCaptureButtons({useSandy}: {useSandy?: boolean}) {
     }
   }, [selectedDevice, isRecording]);
 
-  return useSandy ? (
+  return (
     <>
       <AntButton
         icon={<CameraOutlined />}
@@ -103,24 +120,5 @@ export default function ScreenCaptureButtons({useSandy}: {useSandy?: boolean}) {
         danger={isRecording}
       />
     </>
-  ) : (
-    <ButtonGroup>
-      <Button
-        compact={true}
-        onClick={handleScreenshot}
-        icon="camera"
-        title="Take Screenshot"
-        disabled={!selectedDevice}
-      />
-      <Button
-        compact={true}
-        onClick={handleRecording}
-        icon={isRecording ? 'stop-playback' : 'camcorder'}
-        pulse={isRecording}
-        selected={isRecording}
-        title="Make Screen Recording"
-        disabled={!selectedDevice || !isRecordingAvailable}
-      />
-    </ButtonGroup>
   );
 }

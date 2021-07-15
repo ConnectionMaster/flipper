@@ -14,7 +14,7 @@ import {reportPlatformFailures} from '../utils/metrics';
 import CancellableExportStatus from './CancellableExportStatus';
 import {performance} from 'perf_hooks';
 import {Logger} from '../fb-interfaces/Logger';
-import {Idler} from '../utils/Idler';
+import {IdlerImpl} from '../utils/Idler';
 import {
   exportStoreToFile,
   EXPORT_FLIPPER_TRACE_EVENT,
@@ -86,7 +86,7 @@ export default class ShareSheetExportFile extends Component<Props, State> {
     runInBackground: false,
   };
 
-  idler = new Idler();
+  idler = new IdlerImpl();
 
   dispatchAndUpdateToolBarStatus(msg: string) {
     this.store.dispatch(
@@ -131,7 +131,12 @@ export default class ShareSheetExportFile extends Component<Props, State> {
           requireInteraction: true,
         });
       }
-      this.setState({fetchMetaDataErrors, result: {kind: 'success'}});
+      this.setState({
+        fetchMetaDataErrors,
+        result: fetchMetaDataErrors
+          ? {error: JSON.stringify(fetchMetaDataErrors) as any, kind: 'error'}
+          : {kind: 'success'},
+      });
       this.store.dispatch(unsetShare());
       this.props.logger.trackTimeSince(mark, 'export:file-success');
     } catch (err) {
@@ -145,8 +150,9 @@ export default class ShareSheetExportFile extends Component<Props, State> {
       if (!this.state.runInBackground) {
         // Show the error in UI.
         this.setState({result});
+      } else {
+        this.store.dispatch(unsetShare());
       }
-      this.store.dispatch(unsetShare());
       this.props.logger.trackTimeSince(mark, 'export:file-error', result);
       throw err;
     }

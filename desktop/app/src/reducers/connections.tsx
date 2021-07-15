@@ -13,15 +13,14 @@ import {produce} from 'immer';
 import type BaseDevice from '../devices/BaseDevice';
 import MacDevice from '../devices/MacDevice';
 import type Client from '../Client';
-import {UninitializedClient} from '../UninitializedClient';
+import type {UninitializedClient} from '../UninitializedClient';
 import {isEqual} from 'lodash';
 import {performance} from 'perf_hooks';
-import {Actions} from '.';
+import type {Actions, Store} from '.';
 import {WelcomeScreenStaticView} from '../sandy-chrome/WelcomeScreen';
 import {getPluginKey, isDevicePluginDefinition} from '../utils/pluginUtils';
 import {deconstructClientId} from '../utils/clientUtils';
-import {PluginDefinition} from '../plugin';
-import {RegisterPluginAction} from './plugins';
+import type {RegisterPluginAction} from './plugins';
 import MetroDevice from '../devices/MetroDevice';
 import {Logger} from 'flipper-plugin';
 
@@ -32,7 +31,35 @@ export type StaticView =
   | ComponentType<StaticViewProps>
   | React.FunctionComponent<any>;
 
-export type State = {
+export type State = StateV2;
+
+export const persistVersion = 2;
+export const persistMigrations = {
+  1: (state: any) => {
+    const stateV0 = state as StateV0;
+    const stateV1 = {
+      ...stateV0,
+      enabledPlugins: stateV0.userStarredPlugins ?? {},
+      enabledDevicePlugins:
+        stateV0.userStarredDevicePlugins ??
+        new Set<string>(INITAL_STATE.enabledDevicePlugins),
+    };
+    return stateV1 as any;
+  },
+  2: (state: any) => {
+    const stateV1 = state as StateV1;
+    const stateV2 = {
+      ...stateV1,
+      enabledPlugins: stateV1.enabledPlugins ?? {},
+      enabledDevicePlugins:
+        stateV1.enabledDevicePlugins ??
+        new Set<string>(INITAL_STATE.enabledDevicePlugins),
+    };
+    return stateV2 as any;
+  },
+};
+
+type StateV2 = {
   devices: Array<BaseDevice>;
   androidEmulators: Array<string>;
   selectedDevice: null | BaseDevice;
@@ -41,7 +68,8 @@ export type State = {
   userPreferredDevice: null | string;
   userPreferredPlugin: null | string;
   userPreferredApp: null | string;
-  userStarredPlugins: {[client: string]: string[]};
+  enabledPlugins: {[client: string]: string[]};
+  enabledDevicePlugins: Set<string>;
   clients: Array<Client>;
   uninitializedClients: Array<{
     client: UninitializedClient;
@@ -50,6 +78,17 @@ export type State = {
   }>;
   deepLinkPayload: unknown;
   staticView: StaticView;
+  selectedAppPluginListRevision: number;
+};
+
+type StateV1 = Omit<StateV2, 'enabledPlugins' | 'enabledDevicePlugins'> & {
+  enabledPlugins?: {[client: string]: string[]};
+  enabledDevicePlugins?: Set<string>;
+};
+
+type StateV0 = Omit<StateV1, 'enabledPlugins' | 'enabledDevicePlugins'> & {
+  userStarredPlugins?: {[client: string]: string[]};
+  userStarredDevicePlugins?: Set<string>;
 };
 
 export type Action =
@@ -109,26 +148,39 @@ export type Action =
       deepLinkPayload: unknown;
     }
   | {
-      // Implemented by rootReducer in `store.tsx`
-      type: 'STAR_PLUGIN';
+      type: 'SET_PLUGIN_ENABLED';
       payload: {
+        pluginId: string;
         selectedApp: string;
-        plugin: PluginDefinition;
+      };
+    }
+  | {
+      type: 'SET_DEVICE_PLUGIN_ENABLED';
+      payload: {
+        pluginId: string;
+      };
+    }
+  | {
+      type: 'SET_PLUGIN_DISABLED';
+      payload: {
+        pluginId: string;
+        selectedApp: string;
+      };
+    }
+  | {
+      type: 'SET_DEVICE_PLUGIN_DISABLED';
+      payload: {
+        pluginId: string;
       };
     }
   | {
       type: 'SELECT_CLIENT';
       payload: string | null;
     }
-  | RegisterPluginAction
   | {
-      // Implemented by rootReducer in `store.tsx`
-      type: 'UPDATE_PLUGIN';
-      payload: {
-        plugin: PluginDefinition;
-        enablePlugin: boolean;
-      };
-    };
+      type: 'APP_PLUGIN_LIST_CHANGED';
+    }
+  | RegisterPluginAction;
 
 const DEFAULT_PLUGIN = 'DeviceLogs';
 const DEFAULT_DEVICE_BLACKLIST = [MacDevice, MetroDevice];
@@ -141,11 +193,19 @@ const INITAL_STATE: State = {
   userPreferredDevice: null,
   userPreferredPlugin: null,
   userPreferredApp: null,
-  userStarredPlugins: {},
+  enabledPlugins: {},
+  enabledDevicePlugins: new Set([
+    'DeviceLogs',
+    'CrashReporter',
+    'MobileBuilds',
+    'Hermesdebuggerrn',
+    'React',
+  ]),
   clients: [],
   uninitializedClients: [],
   deepLinkPayload: null,
   staticView: WelcomeScreenStaticView,
+  selectedAppPluginListRevision: 0,
 };
 
 export default (state: State = INITAL_STATE, action: Actions): State => {
@@ -194,7 +254,7 @@ export default (state: State = INITAL_STATE, action: Actions): State => {
         (device) => device.serial === payload.serial,
       );
       if (existing !== -1) {
-        console.debug(
+        console.warn(
           `Got a new device instance for already existing serial ${payload.serial}`,
         );
         newDevices[existing] = payload;
@@ -217,7 +277,11 @@ export default (state: State = INITAL_STATE, action: Actions): State => {
             if (!deviceSerials.has(device.serial)) {
               return true;
             } else {
-              device.teardown();
+              if (device.connected.get()) {
+                console.warn(
+                  'Tried to unregister a device before it was destroyed',
+                );
+              }
               return false;
             }
           });
@@ -282,9 +346,20 @@ export default (state: State = INITAL_STATE, action: Actions): State => {
     case 'NEW_CLIENT': {
       const {payload} = action;
 
+      const newClients = state.clients.filter((client) => {
+        if (client.id === payload.id) {
+          console.error(
+            `Received a new connection for client ${client.id}, but the old connection was not cleaned up`,
+          );
+          return false;
+        }
+        return true;
+      });
+      newClients.push(payload);
+
       return updateSelection({
         ...state,
-        clients: state.clients.concat(payload),
+        clients: newClients,
         uninitializedClients: state.uninitializedClients.filter((c) => {
           return (
             c.deviceId !== payload.query.device_id ||
@@ -305,11 +380,13 @@ export default (state: State = INITAL_STATE, action: Actions): State => {
 
     case 'CLIENT_REMOVED': {
       const {payload} = action;
+
+      const newClients = state.clients.filter(
+        (client) => client.id !== payload,
+      );
       return updateSelection({
         ...state,
-        clients: state.clients.filter(
-          (client: Client) => client.id !== payload,
-        ),
+        clients: newClients,
       });
     }
 
@@ -353,6 +430,49 @@ export default (state: State = INITAL_STATE, action: Actions): State => {
       });
       return state;
     }
+    case 'SET_PLUGIN_ENABLED': {
+      const {pluginId, selectedApp} = action.payload;
+      return produce(state, (draft) => {
+        if (!draft.enabledPlugins[selectedApp]) {
+          draft.enabledPlugins[selectedApp] = [];
+        }
+        const plugins = draft.enabledPlugins[selectedApp];
+        const idx = plugins.indexOf(pluginId);
+        if (idx === -1) {
+          plugins.push(pluginId);
+        }
+      });
+    }
+    case 'SET_DEVICE_PLUGIN_ENABLED': {
+      const {pluginId} = action.payload;
+      return produce(state, (draft) => {
+        draft.enabledDevicePlugins.add(pluginId);
+      });
+    }
+    case 'SET_PLUGIN_DISABLED': {
+      const {pluginId, selectedApp} = action.payload;
+      return produce(state, (draft) => {
+        if (!draft.enabledPlugins[selectedApp]) {
+          draft.enabledPlugins[selectedApp] = [];
+        }
+        const plugins = draft.enabledPlugins[selectedApp];
+        const idx = plugins.indexOf(pluginId);
+        if (idx !== -1) {
+          plugins.splice(idx, 1);
+        }
+      });
+    }
+    case 'SET_DEVICE_PLUGIN_DISABLED': {
+      const {pluginId} = action.payload;
+      return produce(state, (draft) => {
+        draft.enabledDevicePlugins.delete(pluginId);
+      });
+    }
+    case 'APP_PLUGIN_LIST_CHANGED': {
+      return produce(state, (draft) => {
+        draft.selectedAppPluginListRevision++;
+      });
+    }
     default:
       return state;
   }
@@ -393,25 +513,43 @@ export const selectPlugin = (payload: {
   payload: {...payload, time: payload.time ?? Date.now()},
 });
 
-export const starPlugin = (payload: {
-  plugin: PluginDefinition;
-  selectedApp: string;
-}): Action => ({
-  type: 'STAR_PLUGIN',
-  payload,
-});
-
 export const selectClient = (clientId: string | null): Action => ({
   type: 'SELECT_CLIENT',
   payload: clientId,
 });
 
-export const registerPluginUpdate = (payload: {
-  plugin: PluginDefinition;
-  enablePlugin: boolean;
-}): Action => ({
-  type: 'UPDATE_PLUGIN',
-  payload,
+export const setPluginEnabled = (pluginId: string, appId: string): Action => ({
+  type: 'SET_PLUGIN_ENABLED',
+  payload: {
+    pluginId,
+    selectedApp: appId,
+  },
+});
+
+export const setDevicePluginEnabled = (pluginId: string): Action => ({
+  type: 'SET_DEVICE_PLUGIN_ENABLED',
+  payload: {
+    pluginId,
+  },
+});
+
+export const setDevicePluginDisabled = (pluginId: string): Action => ({
+  type: 'SET_DEVICE_PLUGIN_DISABLED',
+  payload: {
+    pluginId,
+  },
+});
+
+export const setPluginDisabled = (pluginId: string, appId: string): Action => ({
+  type: 'SET_PLUGIN_DISABLED',
+  payload: {
+    pluginId,
+    selectedApp: appId,
+  },
+});
+
+export const appPluginListChanged = (): Action => ({
+  type: 'APP_PLUGIN_LIST_CHANGED',
 });
 
 export function getAvailableClients(
@@ -438,10 +576,10 @@ function getBestAvailableClient(
   device: BaseDevice | null | undefined,
   clients: Client[],
   preferredClient: string | null,
-): Client | undefined {
+): Client | null {
   const availableClients = getAvailableClients(device, clients);
   if (availableClients.length === 0) {
-    return undefined;
+    return null;
   }
   return (
     getClientById(availableClients, preferredClient) ||
@@ -502,20 +640,15 @@ function updateSelection(state: Readonly<State>): State {
   );
   updates.selectedApp = client ? client.id : null;
 
-  const availablePlugins: string[] = [
-    ...(device?.devicePlugins || []),
-    ...(client?.plugins || []),
-  ];
-
   if (
     // Try the preferred plugin first
     state.userPreferredPlugin &&
-    availablePlugins.includes(state.userPreferredPlugin)
+    state.userPreferredPlugin !== state.selectedPlugin
   ) {
     updates.selectedPlugin = state.userPreferredPlugin;
   } else if (
-    !state.selectedPlugin ||
-    !availablePlugins.includes(state.selectedPlugin)
+    !state.selectedPlugin &&
+    state.enabledDevicePlugins.has(DEFAULT_PLUGIN)
   ) {
     // currently selected plugin is not available in this state,
     // fall back to the default
@@ -535,15 +668,36 @@ export function getSelectedPluginKey(state: State): string | undefined {
     : undefined;
 }
 
-export function pluginIsStarred(
-  userStarredPlugins: State['userStarredPlugins'],
+export function isPluginEnabled(
+  enabledPlugins: State['enabledPlugins'],
+  enabledDevicePlugins: State['enabledDevicePlugins'],
   app: string | null,
   pluginId: string,
 ): boolean {
-  if (!app) {
+  if (enabledDevicePlugins?.has(pluginId)) {
+    return true;
+  }
+  if (!app || !enabledPlugins) {
     return false;
   }
   const appInfo = deconstructClientId(app);
-  const starred = userStarredPlugins[appInfo.app];
-  return starred && starred.indexOf(pluginId) > -1;
+  const enabledAppPlugins = enabledPlugins[appInfo.app];
+  return enabledAppPlugins && enabledAppPlugins.indexOf(pluginId) > -1;
+}
+
+export function destroyDevice(store: Store, logger: Logger, serial: string) {
+  const device = store
+    .getState()
+    .connections.devices.find((device) => device.serial === serial);
+  if (device) {
+    device.destroy();
+    logger.track('usage', 'unregister-device', {
+      os: device.os,
+      serial,
+    });
+    store.dispatch({
+      type: 'UNREGISTER_DEVICES',
+      payload: new Set([serial]),
+    });
+  }
 }

@@ -7,11 +7,10 @@
  * @format
  */
 
-import React, {PureComponent, CSSProperties} from 'react';
+import React, {CSSProperties, ReactNode} from 'react';
 import styled from '@emotion/styled';
 import ReactMarkdown from 'react-markdown';
-import {colors} from './colors';
-import {shell} from 'electron';
+import {getFlipperLib, theme} from 'flipper-plugin';
 
 const Container = styled.div({
   padding: 10,
@@ -21,14 +20,15 @@ const Row = styled.div({
   marginBottom: 5,
   lineHeight: 1.34,
 });
-const Heading = styled.div<{level: number}>((props) => ({
-  fontSize: props.level === 1 ? 18 : 12,
-  textTransform: props.level > 1 ? 'uppercase' : undefined,
-  color: props.level > 1 ? '#90949c' : undefined,
+const Heading = styled.div({fontSize: 18, marginTop: 10, marginBottom: 10});
+const SubHeading = styled.div({
+  fontSize: 12,
+  textTransform: 'uppercase',
+  color: theme.textColorSecondary,
   marginTop: 10,
   marginBottom: 10,
-  fontWeight: props.level > 1 ? 'bold' : 'normal',
-}));
+  fontWeight: 'bold',
+});
 const ListItem = styled.li({
   listStyleType: 'circle',
   listStylePosition: 'inside',
@@ -36,64 +36,67 @@ const ListItem = styled.li({
 });
 const Strong = styled.span({
   fontWeight: 'bold',
-  color: '#1d2129',
+  color: theme.textColorPrimary,
 });
 const Emphasis = styled.span({
   fontStyle: 'italic',
 });
 const Quote = styled(Row)({
   padding: 10,
-  backgroundColor: '#f1f2f3',
+  backgroundColor: theme.backgroundWash,
   fontSize: 13,
 });
 const Code = styled.span({
   fontFamily: '"Courier New", Courier, monospace',
-  backgroundColor: '#f1f2f3',
+  backgroundColor: theme.backgroundWash,
 });
 const Pre = styled(Row)({
   padding: 10,
-  backgroundColor: '#f1f2f3',
+  backgroundColor: theme.backgroundWash,
 });
-class CodeBlock extends PureComponent<{value: string; language: string}> {
-  render() {
-    return (
-      <Pre>
-        <Code>{this.props.value}</Code>
-      </Pre>
-    );
-  }
+function CodeBlock(props: {
+  children: ReactNode[];
+  className?: string;
+  inline?: boolean;
+}) {
+  return props.inline ? (
+    <Code>{props.children}</Code>
+  ) : (
+    <Pre>
+      <Code>{props.children}</Code>
+    </Pre>
+  );
 }
 const Link = styled.span({
-  color: colors.blue,
+  color: theme.textColorActive,
 });
-class LinkReference extends PureComponent<{href: string}> {
-  render() {
-    return (
-      <Link onClick={() => shell.openExternal(this.props.href)}>
-        {this.props.children}
-      </Link>
-    );
-  }
+function LinkReference(props: {href: string; children: Array<ReactNode>}) {
+  return (
+    <Link onClick={() => getFlipperLib().openLink(props.href)}>
+      {props.children}
+    </Link>
+  );
 }
 
 export function Markdown(props: {source: string; style?: CSSProperties}) {
   return (
     <Container style={props.style}>
       <ReactMarkdown
-        source={props.source}
-        renderers={{
-          heading: Heading,
-          listItem: ListItem,
-          paragraph: Row,
+        components={{
+          h1: Heading,
+          h2: SubHeading,
+          h3: 'h2',
+          li: ListItem,
+          p: Row,
           strong: Strong,
-          emphasis: Emphasis,
-          inlineCode: Code,
+          em: Emphasis,
           code: CodeBlock,
           blockquote: Quote,
-          link: LinkReference,
-          linkReference: LinkReference,
-        }}
-      />
+          // @ts-ignore props missing href but existing run-time
+          a: LinkReference,
+        }}>
+        {props.source}
+      </ReactMarkdown>
     </Container>
   );
 }

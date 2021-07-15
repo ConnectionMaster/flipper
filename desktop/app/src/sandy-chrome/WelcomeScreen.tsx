@@ -22,7 +22,8 @@ const {Text, Title} = Typography;
 
 import constants from '../fb-stubs/constants';
 import isProduction from '../utils/isProduction';
-import {shell, remote} from 'electron';
+import {getAppVersion} from '../utils/info';
+import {getFlipperLib} from 'flipper-plugin';
 
 const RowContainer = styled(FlexRow)({
   alignItems: 'flex-start',
@@ -77,7 +78,7 @@ function WelcomeFooter({
   return (
     <FooterContainer>
       <Checkbox checked={checked} onChange={(e) => onCheck(e.target.checked)}>
-        <Text style={{fontSize: theme.fontSize.smallBody}}>
+        <Text style={{fontSize: theme.fontSize.small}}>
           Show this when app opens (or use ? icon on left)
         </Text>
       </Checkbox>
@@ -88,7 +89,7 @@ function WelcomeFooter({
   );
 }
 
-const openExternal = (url: string) => () => shell && shell.openExternal(url);
+const openExternal = (url: string) => () => getFlipperLib().openLink(url);
 
 export default function WelcomeScreen({
   visible,
@@ -144,9 +145,7 @@ function WelcomeScreenContent() {
         <Image width={125} height={125} src="./icon.png" preview={false} />
         <Title level={1}>Welcome to Flipper</Title>
         <Text style={{color: theme.textColorPlaceholder}}>
-          {isProduction() && remote
-            ? `Version ${remote.app.getVersion()}`
-            : 'Development Mode'}
+          {isProduction() ? `Version ${getAppVersion()}` : 'Development Mode'}
         </Text>
       </Space>
       <Space direction="vertical" size="large" style={{width: '100%'}}>
